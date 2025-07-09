@@ -2,7 +2,6 @@ import numpy as np
 import astropy.units as u
 from .utils import *
 
-global cosmo
 cosmo, cosmo_h = define_cosmo()
 
 def angular_to_physical(z, arcsec_per_pix):

@@ -7,11 +7,8 @@ from .utils import *
 from .config import API_KEY
 headers = {"api-key":API_KEY}
 
-global cosmo
 cosmo, cosmo_h = define_cosmo()
-
-global imf_type, add_neb_emission, add_igm_absorption, igm_type
-imf_type, add_neb_emission, add_igm_absorption, igm_type = fsps_setup()
+imf_type, add_neb_emission, add_igm_absorption, igm_type, dust_index_bc, gas_logu, dust_index, t_esc = fsps_setup()
 
 baseUrl_tng = 'http://www.tng-project.org/api/'
 
