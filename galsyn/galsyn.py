@@ -33,10 +33,10 @@ def init_worker():
     sp_instance.params["dust1"] = 0.0
     sp_instance.params["dust2"] = 0.0   # optical depth
 
-def _process_pixel_data(ii, jj, star_particle_membership, gas_particle_membership,
-                                    stars_mass, stars_age, stars_zsol, stars_init_mass,
-                                    gas_mass, gas_sfr_inst, gas_zsol, gas_log_temp, gas_mass_H,
-                                    filters, filter_transmission, snap_z, pix_area_kpc2, mean_AV_unres):
+def _process_pixel_data(ii, jj, star_particle_membership, gas_particle_membership, 
+                        stars_mass, stars_age, stars_zsol, stars_init_mass, 
+                        gas_mass, gas_sfr_inst, gas_zsol, gas_log_temp, gas_mass_H, 
+                        filters, filter_transmission, snap_z, pix_area_kpc2, mean_AV_unres):
     """
     ii=y jj=x
     Worker function to process calculations for a single pixel (ii, jj).
@@ -65,7 +65,7 @@ def _process_pixel_data(ii, jj, star_particle_membership, gas_particle_membershi
                      (np.isnan(stars_age[star_ids0]) == False) &
                      (np.isnan(stars_zsol[star_ids0]) == False))[0]
     star_ids = star_ids0[idxs]
-
+    
     star_los_dist0 = np.asarray([x[1] for x in star_particle_membership[ii][jj]])
     star_los_dist = star_los_dist0[idxs]
 
@@ -73,7 +73,7 @@ def _process_pixel_data(ii, jj, star_particle_membership, gas_particle_membershi
     gas_ids0 = np.asarray([x[0] for x in gas_particle_membership[ii][jj]], dtype=int)
     idxg = np.where(np.isnan(gas_mass[gas_ids0]) == False)[0]
     gas_ids = gas_ids0[idxg]
-
+    
     gas_los_dist0 = np.asarray([x[1] for x in gas_particle_membership[ii][jj]])
     gas_los_dist = gas_los_dist0[idxg]
 
@@ -114,58 +114,28 @@ def _process_pixel_data(ii, jj, star_particle_membership, gas_particle_membershi
         array_AV = []
         array_tauV = []
 
-        # --- Grouping star particles by metallicity ---
-        # Create a list of tuples: (logzsol, star_id, mass, age, los_dist)
-        # Using a list of dictionaries for clarity, but tuples are fine too.
-        star_particle_data = []
         for i_sid in range(len(star_ids)):
             star_id = star_ids[i_sid]
-            star_particle_data.append({
-                'logzsol': np.log10(stars_zsol[star_id]),
-                'age': stars_age[star_id],
-                'mass': stars_mass[star_id],
-                'los_dist': star_los_dist[i_sid]
-            })
 
-        # Sort the star particles by logzsol
-        star_particle_data.sort(key=itemgetter('logzsol'))
+            logzsol = np.log10(stars_zsol[star_id])
+            sp_instance.params["logzsol"] = logzsol   
+            sp_instance.params['gas_logz'] = logzsol
 
-        # Iterate through the sorted star particles
-        for sp_info in star_particle_data:
-            logzsol = sp_info['logzsol']
-            star_age = sp_info['age']
-            star_mass = sp_info['mass']
-            star_los_dist = sp_info['los_dist']
-
-            # Set the metallicity for the current SSP.
-            # This is the crucial part that benefits from the sorting.
-            # FSPS will be more likely to reuse its internal caches.
-            sp_instance.params["logzsol"] = logzsol
-            sp_instance.params['gas_logz'] = logzsol # Keep gas_logz consistent
-
-            # Get the spectrum for the current age
-            # FSPS will efficiently interpolate in age.
-            wave, spec = sp_instance.get_spectrum(peraa=True, tage=star_age) # spectrum in L_sun/AA
+            wave, spec = sp_instance.get_spectrum(peraa=True, tage=stars_age[star_id])        # spectrum in L_sun/AA
 
             # calculate total cold hydrogen gas column density in front of the particle along the line of sight
-            idxg_front = np.where(gas_los_dist < star_los_dist)[0]
+            idxg_front = np.where(gas_los_dist < star_los_dist[i_sid])[0]
             front_gas_ids = gas_ids[idxg_front]
             idxg1 = np.where((gas_sfr_inst[front_gas_ids] > 0.0) | (gas_log_temp[front_gas_ids] < 3.9))[0]
             cold_front_gas_ids = front_gas_ids[idxg1]
-
-            spec_dust = spec # Initialize spec_dust
 
             if len(cold_front_gas_ids) > 0:
                 temp_mw_gas_zsol = np.nansum(gas_mass[cold_front_gas_ids]*gas_zsol[cold_front_gas_ids])/np.nansum(gas_mass[cold_front_gas_ids])
                 nH = np.nansum(gas_mass_H[cold_front_gas_ids])*1.247914e+14/pix_area_kpc2      # number of hydrogen atom per cm^2
                 tauV = tau_dust_given_z(snap_z)*temp_mw_gas_zsol*nH/2.1e+21
-                # Ensure tauV is finite before log10
-                if tauV > 0 and not np.isinf(tauV):
-                    dust_AV = -2.5*np.log10((1.0 - np.exp(-1.0*tauV))/tauV)
-                else:
-                    dust_AV = 0.0 # No dust attenuation if tauV is zero or infinite
+                dust_AV = -2.5*np.log10((1.0 - np.exp(-1.0*tauV))/tauV)
 
-                if np.isnan(dust_AV) or dust_AV==0.0:
+                if np.isnan(dust_AV)==True or dust_AV==0.0:
                     spec_dust = spec
                 else:
                     # attenuation by resolved dust in the diffuse ISM
@@ -173,14 +143,15 @@ def _process_pixel_data(ii, jj, star_particle_membership, gas_particle_membershi
                     spec_dust = spec*np.power(10.0, -0.4*A_lambda)
                     array_tauV.append(tauV)
                     array_AV.append(dust_AV)
-            # else: spec_dust remains 'spec'
+            else:
+                spec_dust = spec
 
-            if star_age <= t_esc:    # age criterion defining young stars associated with birth clouds
+            if stars_age[star_id] <= t_esc:    # age criterion defining young stars associated with birth clouds 
                 # attenuation by unresolved dust in the birth cloud
                 A_lambda = unresolved_dust_birth_cloud(mean_AV_unres, wave, dust_index_bc=dust_index_bc)
                 spec_dust = spec_dust*np.power(10.0, -0.4*A_lambda)
-
-            norm = star_mass/sp_instance.stellar_mass # Use star_mass from the dict
+    
+            norm = stars_mass[star_id]/sp_instance.stellar_mass
 
             if len(np.asarray(spec_dust).shape) == 1:
                 array_spec.append(spec*norm)
@@ -196,7 +167,7 @@ def _process_pixel_data(ii, jj, star_particle_membership, gas_particle_membershi
             mean_tauV = np.nanmean(np.asarray(array_tauV))
 
         redshift_flux, redshift_flux_dust = [], []
-
+        
         if len(array_spec) > 0:
             spec_lum = np.nansum(array_spec, axis=0)
             spec_lum_dust = np.nansum(array_spec_dust, axis=0)
