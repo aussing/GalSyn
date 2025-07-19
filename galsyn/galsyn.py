@@ -33,6 +33,11 @@ def init_worker():
     sp_instance.params["dust1"] = 0.0
     sp_instance.params["dust2"] = 0.0   # optical depth
 
+    wave, spec = sp_instance.get_spectrum(peraa=True, tage=1.0)
+
+    global Alambda_per_AV
+    Alambda_per_AV = modified_calzetti_dust_curve(1.0, wave, dust_index=0.0)
+
 def _process_pixel_data(ii, jj, star_particle_membership, gas_particle_membership, 
                         stars_mass, stars_age, stars_zsol, stars_init_mass, 
                         gas_mass, gas_sfr_inst, gas_zsol, gas_log_temp, gas_mass_H, 
@@ -139,7 +144,8 @@ def _process_pixel_data(ii, jj, star_particle_membership, gas_particle_membershi
                     spec_dust = spec
                 else:
                     # attenuation by resolved dust in the diffuse ISM
-                    A_lambda = modified_calzetti_dust_curve(dust_AV, wave, dust_index=dust_index)
+                    #A_lambda = modified_calzetti_dust_curve(dust_AV, wave, dust_index=dust_index)
+                    A_lambda = Alambda_per_AV * dust_AV
                     spec_dust = spec*np.power(10.0, -0.4*A_lambda)
                     array_tauV.append(tauV)
                     array_AV.append(dust_AV)
