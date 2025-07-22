@@ -4,10 +4,9 @@ from astropy.io import fits
 from .imgutils import *
 from .utils import *
 
-from .config import API_KEY
-headers = {"api-key":API_KEY}
-
 baseUrl_tng = 'http://www.tng-project.org/api/'
+
+headers = {}
 
 def get(path, params=None):
     import requests
@@ -29,10 +28,12 @@ def get(path, params=None):
 
     return r
 
-def get_tng_snaps_info(sim='TNG50-1'):
+def get_tng_snaps_info(sim='TNG50-1', api_key="api-key"):
+    global headers
+    headers = {"api-key":api_key}
     r = get(baseUrl_tng)
     names = [sim['name'] for sim in r['simulations']]
-    sim_info = get( r['simulations'][names.index(sim)]['url'] )
+    sim_info = get( r['simulations'][names.index(sim)]['url'])
     snaps = get(sim_info['snapshots'])
     return snaps
 
@@ -81,24 +82,30 @@ def cosmic_times_of_snapshots(snaps, sim='TNG50-1', snaps_info=None, cosmo='Plan
 
     return np.asarray(cosmic_times)
 
-def download_cutout_subhalo_hdf5(snap_number, subhalo_id, sim='TNG50-1', params=None):
+def download_cutout_subhalo_hdf5(snap_number, subhalo_id, api_key="api-key", sim='TNG50-1', params=None):
+    global headers
+    headers = {"api-key":api_key}
     url = "http://www.tng-project.org/api/" + sim + "/snapshots/" + str(int(snap_number)) + "/subhalos/" + str(int(subhalo_id))
-    sub = get(url)
+    sub = get(url, params=params)
     name0 = get(sub['cutouts']['subhalo'],params)
     name = 'cutout_shalo_'+str(int(snap_number))+'_'+str(int(subhalo_id))+'.hdf5'
     os.rename(name0, name)
     return name 
 
-def download_cutout_parent_halo_hdf5(snap_number, subhalo_id, sim='TNG50-1', params=None):
+def download_cutout_parent_halo_hdf5(snap_number, subhalo_id, api_key="api-key", sim='TNG50-1', params=None):
+    global headers
+    headers = {"api-key":api_key}
     url = "http://www.tng-project.org/api/" + sim + "/snapshots/" + str(int(snap_number)) + "/subhalos/" + str(int(subhalo_id))
-    sub = get(url)
+    sub = get(url, params=params)
     name0 = get(sub['cutouts']['parent_halo'],params)
     name = 'cutout_phalo_'+str(int(snap_number))+'_'+str(int(subhalo_id))+'.hdf5'
     os.rename(name0, name)
     return name
 
-def get_basic_subhalo_properties(snap_number, subhalo_id, sim='TNG50-1'):
-	url = "http://www.tng-project.org/api/" + sim + "/snapshots/" + str(int(snap_number)) + "/subhalos/" + str(int(subhalo_id))
-	sub = get(url)
-	return sub
+def get_basic_subhalo_properties(snap_number, subhalo_id, api_key="api-key", sim='TNG50-1', params=None):
+    global headers
+    headers = {"api-key":api_key}
+    url = "http://www.tng-project.org/api/" + sim + "/snapshots/" + str(int(snap_number)) + "/subhalos/" + str(int(subhalo_id))
+    sub = get(url, params=params)
+    return sub
 
