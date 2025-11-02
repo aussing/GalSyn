@@ -51,7 +51,6 @@ def drude_profile(Bump_strength, wave_um):
 def bump_amp_from_dust_index(dust_index):
     """
     Derives the UV bump amplitude from the dust index.
-
     This relationship is based on the findings of Kriek & Conroy (2013).
 
     Args:
@@ -81,7 +80,6 @@ def unresolved_dust_birth_cloud_Alambda_per_AV(wave_ang, dust_index_bc=-0.7):
 def calzetti_dust_klambda(wave_ang):
     """
     Calculates the k(lambda) reddening curve for the Calzetti+00 law.
-
     This is a helper function that implements the piecewise function for the
     Calzetti starburst attenuation law.
 
