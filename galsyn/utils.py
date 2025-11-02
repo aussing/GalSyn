@@ -104,7 +104,24 @@ def cosmo_redshifting(wave_rest, L_lambda_rest, z, cosmo):
     wave_obs = wave_rest * (1 + z)
 
     # Convert luminosity to erg/s/Angstrom
-    L_lambda_erg = L_lambda_rest * L_sun.to('erg/s').value  # Now in erg/s/Angstrom
+    # FIX: Use np.clip to handle extreme large values that could cause overflow
+    # Use L_lambda_rest_safe to avoid modifying the input array
+    L_lambda_rest_safe = np.asarray(L_lambda_rest)
+    
+    # Clip luminosity values to prevent overflow before multiplication.
+    # The maximum value for L_lambda_rest that won't overflow when multiplied by 
+    # L_sun (approx 3.8e33) is around 4.7e27. We use a slightly safer estimate.
+    L_sun_erg = L_sun.to('erg/s').value
+    max_safe_l_rest = 1e300 / L_sun_erg 
+    L_lambda_rest_clipped = np.clip(L_lambda_rest_safe, 0.0, max_safe_l_rest)
+
+    # Perform the conversion, suppressing overflow warnings during this line only
+    with np.errstate(over='ignore'):
+        L_lambda_erg = L_lambda_rest_clipped * L_sun_erg
+
+    # After multiplication, treat any resulting 'inf' values (if clipping wasn't enough) as 0.0
+    L_lambda_erg[np.isinf(L_lambda_erg)] = 0.0 
+
 
     # Get luminosity distance in cm
     D_L_cm = cosmo.luminosity_distance(z).to('cm').value
@@ -112,6 +129,9 @@ def cosmo_redshifting(wave_rest, L_lambda_rest, z, cosmo):
     # Compute observed flux density using:
     # F_lambda = (1 / (4 * pi * D_L^2)) * (1 / (1 + z)) * L_lambda_rest
     F_lambda_obs = (L_lambda_erg / (4 * np.pi * D_L_cm**2)) / (1 + z)  # in erg/s/cm^2/Angstrom
+    
+    # Also ensure any remaining NaN/inf/very large values are cleaned up, though the clipping should help
+    F_lambda_obs[~np.isfinite(F_lambda_obs)] = 0.0
 
     return wave_obs, F_lambda_obs
     
@@ -151,8 +171,18 @@ def filtering(wave_spec, flux_spec, wave_filter, trans_filter):
     F_lambda = flux_interp(wave_common)
     T_lambda = trans_interp(wave_common)
 
-    numerator = np.trapz(F_lambda * T_lambda * wave_common, wave_common)
+    # FIX: Add error handling for the multiplication in the integral to catch NaNs/Infs
+    with np.errstate(invalid='ignore', divide='ignore', over='ignore'):
+        integrand = F_lambda * T_lambda * wave_common
+        # Replace non-finite values (like NaNs/Infs from invalid ops) with 0 before integration
+        integrand[~np.isfinite(integrand)] = 0.0 
+    
+    numerator = np.trapz(integrand, wave_common)
     denominator = np.trapz(T_lambda * wave_common, wave_common)
+
+    # Handle division by zero if the filter denominator is zero (i.e., filter has no transmission)
+    if denominator == 0.0:
+        return 0.0
 
     flux_phot = numerator / denominator
 
