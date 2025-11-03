@@ -716,34 +716,41 @@ def _process_pixel_data(ii, jj, star_particle_membership_list, gas_particle_memb
             # Calculate Light-weighted age and metallicity (stellar light)
             total_L_nodust = np.nansum(array_L_nodust)
             total_L_dust = np.nansum(array_L_dust)
+
+            if total_L_nodust > 0:
+                pixel_results['map_lw_age_nodust'] = np.nansum(np.asarray(array_L_nodust) * stars_age[star_ids]) / total_L_nodust
+                pixel_results['map_lw_zsol_nodust'] = np.nansum(np.asarray(array_L_nodust) * stars_zmet[star_ids] / FSPS_Z_SUN) / total_L_nodust
+            else:
+                pixel_results['map_lw_age_nodust'] = np.nan
+                pixel_results['map_lw_zsol_nodust'] = np.nan
+
+            if total_L_dust > 0:
+                pixel_results['map_lw_age_dust'] = np.nansum(np.asarray(array_L_dust) * stars_age[star_ids]) / total_L_dust
+                pixel_results['map_lw_zsol_dust'] = np.nansum(np.asarray(array_L_dust) * stars_zmet[star_ids] / FSPS_Z_SUN) / total_L_dust
+            else:
+                pixel_results['map_lw_age_dust'] = np.nan
+                pixel_results['map_lw_zsol_dust'] = np.nan
             
             # --- Light-weighted velocity maps only calculated if output_pixel_spectra_flag is True ---
             if output_pixel_spectra_flag:
                 array_vel_los = np.asarray(array_vel_los)
-
+                
                 if total_L_nodust > 0:
-                    pixel_results['map_lw_age_nodust'] = np.nansum(np.asarray(array_L_nodust) * stars_age[star_ids]) / total_L_nodust
-                    pixel_results['map_lw_zsol_nodust'] = np.nansum(np.asarray(array_L_nodust) * stars_zmet[star_ids] / BAGPIPES_Z_SUN) / total_L_nodust
                     pixel_results['map_lw_vel_los_nodust'] = np.nansum(np.asarray(array_L_nodust) * array_vel_los) / total_L_nodust
                 else:
-                    pixel_results['map_lw_age_nodust'] = np.nan
-                    pixel_results['map_lw_zsol_nodust'] = np.nan
-                    # map_lw_vel_los_nodust remains np.nan
+                    pixel_results['map_lw_vel_los_nodust'] = np.nan # Already initialized to nan
 
                 if total_L_dust > 0:
-                    pixel_results['map_lw_age_dust'] = np.nansum(np.asarray(array_L_dust) * stars_age[star_ids]) / total_L_dust
-                    pixel_results['map_lw_zsol_dust'] = np.nansum(np.asarray(array_L_dust) * stars_zmet[star_ids] / BAGPIPES_Z_SUN) / total_L_dust
                     pixel_results['map_lw_vel_los_dust'] = np.nansum(np.asarray(array_L_dust) * array_vel_los) / total_L_dust
                 else:
-                    pixel_results['map_lw_age_dust'] = np.nan
-                    pixel_results['map_lw_zsol_dust'] = np.nan
-                    # map_lw_vel_los_dust remains np.nan
+                    pixel_results['map_lw_vel_los_dust'] = np.nan # Already initialized to nan
 
-                # Calculate Light-weighted velocity for nebular emission
                 total_L_nebular = np.nansum(array_L_nebular)
                 if total_L_nebular > 0:
                     pixel_results['map_lw_vel_los_nebular'] = np.nansum(np.asarray(array_L_nebular) * array_vel_los_nebular_weighted) / total_L_nebular
-                # else: map_lw_vel_los_nebular remains np.nan
+                else:
+                    pixel_results['map_lw_vel_los_nebular'] = np.nan # Already initialized to nan
+            # --- End Light-weighted velocity block ---
                 
     return ii, jj, pixel_results
 
