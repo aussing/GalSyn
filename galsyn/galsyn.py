@@ -175,13 +175,14 @@ class GalaxySynthesizer:
 
     @property
     def pix_arcsec(self):
-        """float: The side length of each square pixel in arcseconds."""
+        """float or None: The side length of each square pixel in arcseconds."""
         return self._pix_arcsec
 
     @pix_arcsec.setter
     def pix_arcsec(self, value):
-        if not isinstance(value, (int, float)) or value <= 0:
-            raise ValueError("pix_arcsec must be a positive number.")
+        if value is not None: 
+            if not isinstance(value, (int, float)) or value <= 0:
+                raise ValueError("pix_arcsec must be a positive number.")
         self._pix_arcsec = value
 
     @property
@@ -191,8 +192,9 @@ class GalaxySynthesizer:
 
     @pix_kpc.setter
     def pix_kpc(self, value):
-        if value is not None and (not isinstance(value, (int, float)) or value <= 0):
-            raise ValueError("pix_kpc must be a positive number or None.")
+        if value is not None:
+            if not isinstance(value, (int, float)) or value <= 0:
+                raise ValueError("pix_kpc must be a positive number or None.")
         self._pix_kpc = value
 
     @property
