@@ -60,7 +60,8 @@ def physical_to_angular(z, physical_size_kpc, cosmo):
     D_A = cosmo.angular_diameter_distance(z).to(u.kpc)
     
     # Convert physical size to angular size in arcseconds
-    angular_size_arcsec = (physical_size_kpc * u.kpc / D_A).to(u.rad).value * 206265  # arcsec
+    #angular_size_arcsec = (physical_size_kpc * u.kpc / D_A).to(u.rad).value * 206265  # arcsec
+    angular_size_arcsec = (physical_size_kpc * u.kpc / D_A).to(u.arcsec, u.dimensionless_angles()).value  # arcsec
     
     return angular_size_arcsec
 
