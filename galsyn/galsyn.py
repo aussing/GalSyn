@@ -31,7 +31,7 @@ class GalaxySynthesizer:
             sim_file (str, optional): Path to the HDF5 simulation file. Defaults to None.
             z (float, optional): Redshift of the galaxy. Defaults to 0.01.
             filters (list, optional): List of filter names for which to generate images.
-                                      e.g., ['FUV', 'NUV']. Defaults to [].
+                                      e.g., ['jwst_f200w', 'jwst_f356w']. Defaults to [].
             filter_transmission_path (dict, optional): Dictionary mapping custom filter
                                                        names to their transmission curve
                                                        file paths. Defaults to {}.
@@ -46,7 +46,8 @@ class GalaxySynthesizer:
 
         # Set other default parameters
         self._dim_kpc = None
-        self._pix_arcsec = 0.02
+        self._pix_arcsec = None
+        self._pix_kpc = 0.1
         self._flux_unit = 'MJy/sr'
         self._polar_angle_deg = 0
         self._azimuth_angle_deg = 0
@@ -182,6 +183,17 @@ class GalaxySynthesizer:
         if not isinstance(value, (int, float)) or value <= 0:
             raise ValueError("pix_arcsec must be a positive number.")
         self._pix_arcsec = value
+
+    @property
+    def pix_kpc(self):
+        """float or None: The physical side length of each square pixel in kpc."""
+        return self._pix_kpc
+
+    @pix_kpc.setter
+    def pix_kpc(self, value):
+        if value is not None and (not isinstance(value, (int, float)) or value <= 0):
+            raise ValueError("pix_kpc must be a positive number or None.")
+        self._pix_kpc = value
 
     @property
     def flux_unit(self):
@@ -846,6 +858,7 @@ class GalaxySynthesizer:
                 'filter_transmission_path': self.filter_transmission_path,
                 'dim_kpc': self.dim_kpc,
                 'pix_arcsec': self.pix_arcsec,
+                'pix_kpc': self.pix_kpc,
                 'flux_unit': self.flux_unit,
                 'polar_angle_deg': self.polar_angle_deg,
                 'azimuth_angle_deg': self.azimuth_angle_deg,

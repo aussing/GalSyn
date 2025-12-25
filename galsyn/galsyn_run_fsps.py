@@ -764,7 +764,7 @@ def _process_pixel_data(ii, jj, star_particle_membership_list, gas_particle_memb
 
 
 def generate_images(sim_file, z, filters, filter_transmission_path, dim_kpc=None,
-                    pix_arcsec=0.02, flux_unit='MJy/sr', polar_angle_deg=0, azimuth_angle_deg=0,
+                    pix_arcsec=None, pix_kpc=0.1, flux_unit='MJy/sr', polar_angle_deg=0, azimuth_angle_deg=0,
                     name_out_img=None, n_jobs=-1, ssp_code='FSPS', imf_type=1, imf_upper_limit=120.0, imf_lower_limit=0.08,
                     imf1=1.3, imf2=2.3, imf3=2.3, vdmc=0.08, mdave=0.5, gas_logu=-2.0,
                     igm_type=0, dust_index_bc=-0.7, dust_index=0.0, t_esc=0.01, dust_eta=1.0,
@@ -788,7 +788,8 @@ def generate_images(sim_file, z, filters, filter_transmission_path, dim_kpc=None
                                          Keys are filter names, values are file paths. Each text file has
                                          two columns: wavelength, transmission.
         dim_kpc (float, optional): Dimension of the image in kpc. If None, assigned automatically. Defaults to None.
-        pix_arcsec (float, optional): Pixel size in arcseconds. Defaults to 0.02.
+        pix_arcsec (float, optional): Pixel size in arcseconds. Defaults to None.
+        pix_kpc (float, optional): Pixel size in physical unit kpc. Defaults to 0.1. If pix_kpc is provided, pix_arcsec input will be ignored but converted from pix_kpc (given z) instead.
         flux_unit (string, optional): Desired flux unit for the generated images. Options are: 'MJy/sr', 'nJy', 'AB magnitude', or 'erg/s/cm2/A'. Default to 'MJy/sr'.
         polar_angle_deg (float, optional): Polar angle for projection. Defaults to 0.
         azimuth_angle_deg (float, optional): Azimuth angle for projection. Defaults to 0.
@@ -846,9 +847,17 @@ def generate_images(sim_file, z, filters, filter_transmission_path, dim_kpc=None
     snap_a = 1.0/(1.0 + snap_z)
     snap_univ_age = cosmo.age(snap_z).value
 
-    pix_kpc = angular_to_physical(snap_z, pix_arcsec, cosmo)
-    pix_area_kpc2 = pix_kpc*pix_kpc
-    print ('pixel size: %lf arcsec or %lf kpc' % (pix_arcsec,pix_kpc))
+    # handle pix_kpc overriding pix_arcsec
+    if pix_kpc is not None:
+        if pix_arcsec is None:
+            pix_arcsec = physical_to_angular(snap_z, pix_kpc, cosmo)
+    else:
+        if pix_arcsec is None:
+            raise ValueError("Either pix_kpc or pix_arcsec must be provided.")
+        pix_kpc = angular_to_physical(snap_z, pix_arcsec, cosmo)
+
+    pix_area_kpc2 = pix_kpc * pix_kpc
+    print('pixel size: %lf kpc (equivalent to %lf arcsec)' % (pix_kpc, pix_arcsec))
 
     f = h5py.File(sim_file,'r')
 
