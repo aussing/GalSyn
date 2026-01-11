@@ -46,6 +46,7 @@ class GalaxySynthesizer:
 
         # Set other default parameters
         self._dim_kpc = None
+        self._smoothing_length = 0.15  # Default in kpc
         self._pix_arcsec = None
         self._pix_kpc = 0.1
         self._flux_unit = 'MJy/sr'
@@ -172,6 +173,17 @@ class GalaxySynthesizer:
             if not isinstance(value, (int, float)) or value <= 0:
                 raise ValueError("dim_kpc must be a positive number or None.")
         self._dim_kpc = value
+
+    @property
+    def smoothing_length(self):
+        """float: The intrinsic resolution scale (kpc) used for initial gridding."""
+        return self._smoothing_length
+
+    @smoothing_length.setter
+    def smoothing_length(self, value):
+        if not isinstance(value, (int, float)) or value <= 0:
+            raise ValueError("smoothing_length must be a positive number.")
+        self._smoothing_length = float(value)
 
     @property
     def pix_arcsec(self):
@@ -859,6 +871,7 @@ class GalaxySynthesizer:
                 'filters': self.filters,
                 'filter_transmission_path': self.filter_transmission_path,
                 'dim_kpc': self.dim_kpc,
+                'smoothing_length': self.smoothing_length,
                 'pix_arcsec': self.pix_arcsec,
                 'pix_kpc': self.pix_kpc,
                 'flux_unit': self.flux_unit,
@@ -873,7 +886,7 @@ class GalaxySynthesizer:
                 'dust_index': self.dust_index,
                 't_esc': self.t_esc,
                 'dust_eta': self.dust_eta,
-                'scale_dust_redshift': self.scale_dust_redshift, # Pass the new parameter
+                'scale_dust_redshift': self.scale_dust_redshift,
                 'cosmo_str': self.cosmo_str,
                 'dust_law': self.dust_law,
                 'bump_amp': self.bump_amp,

@@ -12,12 +12,13 @@ import multiprocessing
 from scipy.interpolate import interp1d, RegularGridInterpolator
 from scipy.integrate import simpson
 import importlib.resources
+from scipy.ndimage import zoom
 
 import fsps
 
 FSPS_Z_SUN = 0.019
 
-# Global variables for SSP data (loaded once per worker if use_precomputed_ssp is True)
+# Global variables for SSP data
 ssp_wave = None
 ssp_ages_gyr = None
 ssp_logzsol_grid = None
@@ -30,10 +31,9 @@ _global_ssp_stellar_mass_interpolator = None
 _global_ssp_stellar_continuum_interpolator = None
 _global_ssp_nebular_emission_interpolator = None
 
-# Global variables for FSPS instance (initialized once per worker if use_precomputed_ssp is False)
 sp_instance = None
 
-# Other global worker variables (particle data, etc. - these will be set by init_worker)
+# Global worker variables
 igm_trans = None
 snap_z = None
 pix_area_kpc2 = None
@@ -56,17 +56,11 @@ func_interp_dust_index = None
 use_precomputed_ssp = False
 ssp_interpolation_method = 'nearest'
 
-# Global variables for dustindexAV_AV and dustindexAV_dust_index
 dustindexAV_AV = None
 dustindexAV_dust_index = None
 
 _worker_scale_dust_tau = None
-
 output_pixel_spectra_flag = False
-# Renamed from global_output_obs_wave to _worker_output_obs_wave
-# as it's defined and used within each worker for interpolation.
-# The actual common output grid is 'fixed_global_output_obs_wave'
-# determined in the main process.
 _worker_output_obs_wave_grid = None 
 
 _worker_filters = None
@@ -95,56 +89,134 @@ _worker_gas_mass_H = None
 _worker_gas_vel_los_proj = None
 _worker_gas_coords = None 
 
-# Global variables for light-weighted calculation wavelength range
-_lw_wave_min_rest = 1000.0 # Angstrom
-_lw_wave_max_rest = 30000.0 # Angstrom
+_lw_wave_min_rest = 1000.0 
+_lw_wave_max_rest = 30000.0 
+
+
+def rebin_map(data, factor, mode='sum'):
+    """
+    Rebins a 2D or 3D array with float factors and robust NaN handling.
+    'sum' preserves total flux/mass.
+    'mean' preserves average property values (Age, Temperature).
+    """
+    if factor == 1.0:
+        return data
+
+    zoom_rate = 1.0 / factor
+    # Handle spatial scaling (assumes Y, X are first two dims)
+    zoom_factors = (zoom_rate, zoom_rate, 1) if data.ndim == 3 else (zoom_rate, zoom_rate)
+
+    # Use order=1 (bilinear) as it is the most stable for physical data
+    # Note: zoom will propagate NaNs into the surrounding pixels
+    rescaled = zoom(data, zoom_factors, order=1, prefilter=False)
+
+    if mode == 'sum':
+        # Apply the area-scaling factor
+        rescaled = rescaled * (factor**2)
+        
+        # Enforce exact flux conservation (ignoring NaNs)
+        if data.ndim == 3:
+            sum_in = np.nansum(data, axis=(0, 1))
+            sum_out = np.nansum(rescaled, axis=(0, 1))
+            nonzero = (sum_out != 0) & (~np.isnan(sum_out))
+            rescaled[..., nonzero] *= (sum_in[nonzero] / sum_out[nonzero])
+        else:
+            sum_in = np.nansum(data)
+            sum_out = np.nansum(rescaled)
+            if sum_out != 0 and not np.isnan(sum_out):
+                rescaled *= (sum_in / sum_out)
+
+    elif mode == 'mean':
+        # Enforce property conservation
+        # Ensures the average of the new map matches the average of the old map
+        if data.ndim == 3:
+            mean_in = np.nanmean(data, axis=(0, 1))
+            mean_out = np.nanmean(rescaled, axis=(0, 1))
+            nonzero = (mean_out != 0) & (~np.isnan(mean_out))
+            rescaled[..., nonzero] *= (mean_in[nonzero] / mean_out[nonzero])
+        else:
+            mean_in = np.nanmean(data)
+            mean_out = np.nanmean(rescaled)
+            if mean_out != 0 and not np.isnan(mean_out):
+                rescaled *= (mean_in / mean_out)
+
+    return rescaled
+
+
+def rebin_map_old1(data, factor, mode='sum'):
+    """
+    Rebins a 2D or 3D array by any float factor.
+    
+    If mode='sum', total flux is preserved (Extensive property).
+    If mode='mean', average values are preserved (Intensive property).
+    """
+    if factor == 1.0:
+        return data
+
+    zoom_rate = 1.0 / factor
+    if data.ndim == 3:
+        zoom_factors = (zoom_rate, zoom_rate, 1)
+    else:
+        zoom_factors = (zoom_rate, zoom_rate)
+
+    rescaled = zoom(data, zoom_factors, order=1, prefilter=False)
+
+    if mode == 'sum':
+        rescaled = rescaled * (factor**2)
+
+        # enforce exact flux conservation
+        if data.ndim == 3:
+            # compute sums per spectral slice (axis 0,1 are spatial)
+            sum_in = np.nansum(data, axis=(0, 1))
+            sum_out = np.nansum(rescaled, axis=(0, 1))
+            # avoid division by zero
+            nonzero = sum_out != 0
+            rescaled[..., nonzero] *= (sum_in[nonzero] / sum_out[nonzero])
+        else:
+            sum_in = np.nansum(data)
+            sum_out = np.nansum(rescaled)
+            if sum_out != 0:
+                rescaled *= (sum_in / sum_out)
+
+        return rescaled
+    else:
+        return rescaled
+
+def rebin_map_old(data, factor, mode='sum'):
+    """
+    Rebins a 2D or 3D array by an integer factor.
+    'sum' is used for flux-based maps to preserve total energy.
+    'mean' is used for property maps (age, metallicity).
+    """
+    if factor == 1:
+        return data
+    
+    if data.ndim == 3:
+        y, x, z = data.shape
+        # Ensure dimensions are divisible by factor
+        new_y, new_x = y // factor, x // factor
+        reshaped = data[:new_y*factor, :new_x*factor, :].reshape(new_y, factor, new_x, factor, z)
+        result = reshaped.sum(axis=(1, 3))
+        return result if mode == 'sum' else result / (factor**2)
+    
+    y, x = data.shape
+    new_y, new_x = y // factor, x // factor
+    reshaped = data[:new_y*factor, :new_x*factor].reshape(new_y, factor, new_x, factor)
+    result = reshaped.sum(axis=(1, 3))
+    return result if mode == 'sum' else result / (factor**2)
 
 def _load_filter_transmission_from_paths(filters_list, filter_transmission_path_dict):
-    """
-    Loads filter transmission data from specified text files and calculates
-    pivot wavelengths.
-    """
     filter_transmission_data = {}
     filter_wave_pivot_data = {}
-
     for f_name in filters_list:
-        if f_name not in filter_transmission_path_dict:
-            raise ValueError(f"Path for filter '{f_name}' not provided in filter_transmission_path.")
-        
         file_path = filter_transmission_path_dict[f_name]
-        try:
-            # Load data from the text file (assuming 2 columns: wavelength, transmission)
-            data = np.loadtxt(file_path)
-            if data.shape[1] != 2:
-                raise ValueError(f"Filter file {file_path} must have exactly two columns (wavelength, transmission).")
-            
-            wave = data[:, 0]
-            trans = data[:, 1]
-
-            filter_transmission_data[f_name] = {'wave': wave, 'trans': trans}
-
-            # Calculate pivot wavelength
-            # Lambda_p = sqrt(integral(lambda * T(lambda) d_lambda) / integral(T(lambda) / lambda d_lambda))
-            # Numerator: integral(lambda * T(lambda) d_lambda)
-            numerator = simpson(wave * trans, wave)
-            # Denominator: integral(T(lambda) / lambda d_lambda)
-            # Avoid division by zero if trans is zero or wave is zero at some points
-            integrand_denominator = np.where(wave != 0, trans / wave, 0)
-            denominator = simpson(integrand_denominator, wave)
-
-            if denominator > 0:
-                pivot_wavelength = np.sqrt(numerator / denominator)
-            else:
-                pivot_wavelength = np.nan # Or handle as an error/default value
-
-            filter_wave_pivot_data[f_name] = pivot_wavelength # Storing pivot wavelength
-
-        except Exception as e:
-            print(f"Error loading or processing filter file {file_path} for filter {f_name}: {e}")
-            raise
-
+        data = np.loadtxt(file_path)
+        wave, trans = data[:, 0], data[:, 1]
+        filter_transmission_data[f_name] = {'wave': wave, 'trans': trans}
+        num = simpson(wave * trans, wave)
+        den = simpson(np.where(wave != 0, trans / wave, 0), wave)
+        filter_wave_pivot_data[f_name] = np.sqrt(num / den) if den > 0 else np.nan
     return filter_transmission_data, filter_wave_pivot_data
-
 
 def init_worker(ssp_code_val, snap_z_val, pix_area_kpc2_val,  
                 filters_list_val, filter_transmission_path_val,
@@ -163,127 +235,46 @@ def init_worker(ssp_code_val, snap_z_val, pix_area_kpc2_val,
     global ssp_stellar_continuum_grid, ssp_nebular_emission_grid 
     global _global_ssp_stellar_continuum_interpolator, _global_ssp_nebular_emission_interpolator, _global_ssp_stellar_mass_interpolator
     global sp_instance, igm_trans, snap_z, pix_area_kpc2
-    global gas_logu, igm_type
-    global dust_index_bc, dust_index, t_esc, dust_eta, dust_law, bump_amp, salim_a0, salim_a1, salim_a2, salim_a3 
-    global salim_RV, salim_B, dust_Alambda_per_AV, func_interp_dust_index
-    global use_precomputed_ssp, ssp_interpolation_method 
-    global output_pixel_spectra_flag, _worker_output_obs_wave_grid 
+    global gas_logu, igm_type, dust_index_bc, dust_index, t_esc, dust_eta, dust_law, bump_amp
+    global salim_a0, salim_a1, salim_a2, salim_a3, salim_RV, salim_B, dust_Alambda_per_AV, func_interp_dust_index
+    global use_precomputed_ssp, ssp_interpolation_method, output_pixel_spectra_flag, _worker_output_obs_wave_grid 
     global _worker_filters, _worker_filter_transmission, _worker_filter_wave_eff, _worker_imf_type, _worker_cosmo
     global _worker_imf_upper_limit, _worker_imf_lower_limit, _worker_imf1, _worker_imf2, _worker_imf3, _worker_vdmc, _worker_mdave
-    global dustindexAV_AV, dustindexAV_dust_index 
-    global _worker_scale_dust_tau
-
-    # Assign particle data to worker-global variables
+    global dustindexAV_AV, dustindexAV_dust_index, _worker_scale_dust_tau
     global _worker_stars_mass, _worker_stars_age, _worker_stars_zmet, _worker_stars_init_mass, _worker_stars_vel_los_proj, _worker_stars_coords
     global _worker_gas_mass, _worker_gas_sfr_inst, _worker_gas_zmet, _worker_gas_log_temp, _worker_gas_mass_H, _worker_gas_vel_los_proj, _worker_gas_coords
 
-    _worker_stars_mass = stars_mass_arr
-    _worker_stars_age = stars_age_arr
-    _worker_stars_zmet = stars_zmet_arr
-    _worker_stars_init_mass = stars_init_mass_arr
-    _worker_stars_vel_los_proj = stars_vel_los_proj_arr
-    _worker_stars_coords = stars_coords_arr
+    _worker_stars_mass, _worker_stars_age, _worker_stars_zmet = stars_mass_arr, stars_age_arr, stars_zmet_arr
+    _worker_stars_init_mass, _worker_stars_vel_los_proj, _worker_stars_coords = stars_init_mass_arr, stars_vel_los_proj_arr, stars_coords_arr
+    _worker_gas_mass, _worker_gas_sfr_inst, _worker_gas_zmet = gas_mass_arr, gas_sfr_inst_arr, gas_zmet_arr
+    _worker_gas_log_temp, _worker_gas_mass_H, _worker_gas_vel_los_proj, _worker_gas_coords = gas_log_temp_arr, gas_mass_H_arr, gas_vel_los_proj_arr, gas_coords_arr
 
-    _worker_gas_mass = gas_mass_arr
-    _worker_gas_sfr_inst = gas_sfr_inst_arr
-    _worker_gas_zmet = gas_zmet_arr
-    _worker_gas_log_temp = gas_log_temp_arr
-    _worker_gas_mass_H = gas_mass_H_arr
-    _worker_gas_vel_los_proj = gas_vel_los_proj_arr
-    _worker_gas_coords = gas_coords_arr
-
-    snap_z = snap_z_val
-    pix_area_kpc2 = pix_area_kpc2_val
-    
-    _worker_imf_type = imf_type_val
-    _worker_imf_upper_limit = imf_upper_limit_val
-    _worker_imf_lower_limit = imf_lower_limit_val
-    _worker_imf1 = imf1_val 
-    _worker_imf2 = imf2_val 
-    _worker_imf3 = imf3_val 
-    _worker_vdmc = vdmc_val 
-    _worker_mdave = mdave_val
-
-    gas_logu = gas_logu_val
-    igm_type = igm_type_val
-    dust_index_bc = dust_index_bc_val
-    t_esc = t_esc_val
-    dust_eta = dust_eta_val
-    _worker_scale_dust_tau = precomputed_scale_dust_tau_val
-    
+    snap_z, pix_area_kpc2, _worker_imf_type = snap_z_val, pix_area_kpc2_val, imf_type_val
+    _worker_imf_upper_limit, _worker_imf_lower_limit = imf_upper_limit_val, imf_lower_limit_val
+    _worker_imf1, _worker_imf2, _worker_imf3 = imf1_val, imf2_val, imf3_val
+    _worker_vdmc, _worker_mdave, gas_logu, igm_type = vdmc_val, mdave_val, gas_logu_val, igm_type_val
+    dust_index_bc, t_esc, dust_eta, _worker_scale_dust_tau = dust_index_bc_val, t_esc_val, dust_eta_val, precomputed_scale_dust_tau_val
     _worker_cosmo = define_cosmo(cosmo_str_val)
-    
-    dust_law = dust_law_val
-    salim_a0 = salim_a0_val
-    salim_a1 = salim_a1_val
-    salim_a2 = salim_a2_val
-    salim_a3 = salim_a3_val
-    salim_RV = salim_RV_val
-    salim_B = salim_B_val
-    dust_index = dust_index_val
-    bump_amp = bump_amp_val
-    use_precomputed_ssp = use_precomputed_ssp_val 
-    ssp_interpolation_method = ssp_interpolation_method_val 
-
+    dust_law, salim_a0, salim_a1, salim_a2, salim_a3, salim_RV, salim_B = dust_law_val, salim_a0_val, salim_a1_val, salim_a2_val, salim_a3_val, salim_RV_val, salim_B_val
+    dust_index, bump_amp, use_precomputed_ssp, ssp_interpolation_method = dust_index_val, bump_amp_val, use_precomputed_ssp_val, ssp_interpolation_method_val 
     _worker_filters = filters_list_val
-    _worker_filter_transmission, _worker_filter_wave_eff = _load_filter_transmission_from_paths(
-        _worker_filters, filter_transmission_path_val
-    )
-
+    _worker_filter_transmission, _worker_filter_wave_eff = _load_filter_transmission_from_paths(_worker_filters, filter_transmission_path_val)
     output_pixel_spectra_flag = output_pixel_spectra_val
-    
-    # Convert safe_output_obs_wave (which might be a tuple if empty) back to a numpy array.
-    if isinstance(output_obs_wave_grid_val, tuple):
-        _worker_output_obs_wave_grid = np.asarray(output_obs_wave_grid_val) 
-    else:
-        _worker_output_obs_wave_grid = output_obs_wave_grid_val # Set the global worker wave grid (it's a non-empty array)
+    _worker_output_obs_wave_grid = np.asarray(output_obs_wave_grid_val) if isinstance(output_obs_wave_grid_val, tuple) else output_obs_wave_grid_val
 
     if use_precomputed_ssp:
-        if ssp_filepath_val is None:
-            print("Error: ssp_filepath must be provided when use_precomputed_ssp is True.")
-            sys.exit(1)
-        try:
-            with h5py.File(ssp_filepath_val, 'r') as f_ssp:
-                ssp_wave = f_ssp['wavelength'][:]
-                ssp_ages_gyr = f_ssp['ages_gyr'][:]
-                ssp_logzsol_grid = f_ssp['logzsol'][:]
-                ssp_stellar_mass_grid = f_ssp['stellar_mass'][:]
-                ssp_stellar_continuum_grid = f_ssp['stellar_continuum_spectra'][:]
-                ssp_nebular_emission_grid = f_ssp['nebular_emission_spectra'][:]
-                ssp_stellar_mass_grid = f_ssp['stellar_mass'][:]
-                ssp_code_z_sun = f_ssp.attrs['z_sun'] 
-                
-                if ssp_interpolation_method == 'linear': 
-                    _global_ssp_stellar_continuum_interpolator = RegularGridInterpolator( 
-                        (ssp_ages_gyr, ssp_logzsol_grid), ssp_stellar_continuum_grid, 
-                        method='linear', bounds_error=False, fill_value=0.0
-                    )
-                    _global_ssp_nebular_emission_interpolator = RegularGridInterpolator( 
-                        (ssp_ages_gyr, ssp_logzsol_grid), ssp_nebular_emission_grid, 
-                        method='linear', bounds_error=False, fill_value=0.0
-                    )
-                    _global_ssp_stellar_mass_interpolator = RegularGridInterpolator(
-                        (ssp_ages_gyr, ssp_logzsol_grid), ssp_stellar_mass_grid, 
-                        method='linear', bounds_error=False, fill_value=0.0
-                    )
-                elif ssp_interpolation_method == 'cubic':
-                    _global_ssp_stellar_continuum_interpolator = RegularGridInterpolator( 
-                        (ssp_ages_gyr, ssp_logzsol_grid), ssp_stellar_continuum_grid, 
-                        method='cubic', bounds_error=False, fill_value=0.0
-                    )
-                    _global_ssp_nebular_emission_interpolator = RegularGridInterpolator( 
-                        (ssp_ages_gyr, ssp_logzsol_grid), ssp_nebular_emission_grid, 
-                        method='cubic', bounds_error=False, fill_value=0.0
-                    )
-                    _global_ssp_stellar_mass_interpolator = RegularGridInterpolator(
-                        (ssp_ages_gyr, ssp_logzsol_grid), ssp_stellar_mass_grid, 
-                        method='cubic', bounds_error=False, fill_value=0.0
-                    )
-
-        except Exception as e:
-            print(f"Error loading SSP grid from {ssp_filepath_val}: {e}")
-            sys.exit(1)
-    else: # Generate on-the-fly using FSPS
+        with h5py.File(ssp_filepath_val, 'r') as f_ssp:
+            ssp_wave = f_ssp['wavelength'][:]
+            ssp_ages_gyr, ssp_logzsol_grid = f_ssp['ages_gyr'][:], f_ssp['logzsol'][:]
+            ssp_stellar_mass_grid = f_ssp['stellar_mass'][:]
+            ssp_stellar_continuum_grid, ssp_nebular_emission_grid = f_ssp['stellar_continuum_spectra'][:], f_ssp['nebular_emission_spectra'][:]
+            ssp_code_z_sun = f_ssp.attrs['z_sun'] 
+            method = ssp_interpolation_method if ssp_interpolation_method in ['linear', 'cubic'] else None
+            if method:
+                _global_ssp_stellar_continuum_interpolator = RegularGridInterpolator((ssp_ages_gyr, ssp_logzsol_grid), ssp_stellar_continuum_grid, method=method, bounds_error=False, fill_value=0.0)
+                _global_ssp_nebular_emission_interpolator = RegularGridInterpolator((ssp_ages_gyr, ssp_logzsol_grid), ssp_nebular_emission_grid, method=method, bounds_error=False, fill_value=0.0)
+                _global_ssp_stellar_mass_interpolator = RegularGridInterpolator((ssp_ages_gyr, ssp_logzsol_grid), ssp_stellar_mass_grid, method=method, bounds_error=False, fill_value=0.0)
+    else:
         sp_instance = fsps.StellarPopulation(zcontinuous=1)
         sp_instance.params['imf_type'] = _worker_imf_type
         sp_instance.params['imf_upper_limit'] = _worker_imf_upper_limit
@@ -305,77 +296,32 @@ def init_worker(ssp_code_val, snap_z_val, pix_area_kpc2_val,
 
     # Handle relation_AVslope_val
     if isinstance(relation_AVslope_val, str):
-        data_file_name = f"{relation_AVslope_val}_AV_dust_index.txt"
-        try:
-            data_path = str(importlib.resources.files('galsyn.data').joinpath(data_file_name))
-            data = np.loadtxt(data_path)
-            dustindexAV_AV = data[:, 0]
-            dustindexAV_dust_index = data[:, 1]
-        except Exception as e:
-            print(f"Error loading dust relation data from {data_file_name}: {e}")
-            sys.exit(1) 
-    elif isinstance(relation_AVslope_val, dict):
-        dustindexAV_AV = np.asarray(relation_AVslope_val["AV"])
-        dustindexAV_dust_index = np.asarray(relation_AVslope_val["dust_index"])
+        data = np.loadtxt(str(importlib.resources.files('galsyn.data').joinpath(f"{relation_AVslope_val}_AV_dust_index.txt")))
+        dustindexAV_AV, dustindexAV_dust_index = data[:, 0], data[:, 1]
     else:
-        print("Error: Invalid relation_AVslope_val type passed to init_worker.")
-        dustindexAV_AV = np.array([])
-        dustindexAV_dust_index = np.array([])
-        sys.exit(1)
+        dustindexAV_AV, dustindexAV_dust_index = np.asarray(relation_AVslope_val["AV"]), np.asarray(relation_AVslope_val["dust_index"])
 
     if dust_law <= 1:
-        global func_interp_dust_index
         func_interp_dust_index = interp1d(dustindexAV_AV, dustindexAV_dust_index, bounds_error=False, fill_value='extrapolate')
-
-    elif dust_law == 2:
-        bump_amp = bump_amp_from_dust_index(dust_index)
-        dust_Alambda_per_AV = modified_calzetti_dust_Alambda_per_AV(ssp_wave, dust_index=dust_index, bump_amp=bump_amp)
-
-    elif dust_law == 3:
-        bump_amp = bump_amp
-        dust_Alambda_per_AV = modified_calzetti_dust_Alambda_per_AV(ssp_wave, dust_index=dust_index, bump_amp=bump_amp)
-
+    elif dust_law == 2 or dust_law == 3:
+        current_bump = bump_amp_from_dust_index(dust_index) if dust_law == 2 else bump_amp
+        dust_Alambda_per_AV = modified_calzetti_dust_Alambda_per_AV(ssp_wave, dust_index=dust_index, bump_amp=current_bump)
     elif dust_law == 4:
         dust_Alambda_per_AV = salim18_dust_Alambda_per_AV(ssp_wave, salim_a0, salim_a1, salim_a2, salim_a3, salim_B, salim_RV)
+    elif dust_law == 5: dust_Alambda_per_AV = calzetti_dust_Alambda_per_AV(ssp_wave)
+    elif dust_law == 6: dust_Alambda_per_AV = smc_gordon2003_dust_Alambda_per_AV(ssp_wave)
+    elif dust_law == 7: dust_Alambda_per_AV = lmc_gordon2003_dust_Alambda_per_AV(ssp_wave)
+    elif dust_law == 8: dust_Alambda_per_AV = ccm89_dust_Alambda_per_AV(ssp_wave)
+    elif dust_law == 9: dust_Alambda_per_AV = fitzpatrick99_dust_Alambda_per_AV(ssp_wave)
 
-    elif dust_law == 5:
-        dust_Alambda_per_AV = calzetti_dust_Alambda_per_AV(ssp_wave)
-
-    elif dust_law == 6:
-        dust_Alambda_per_AV = smc_gordon2003_dust_Alambda_per_AV(ssp_wave)
-    
-    elif dust_law == 7:
-        dust_Alambda_per_AV = lmc_gordon2003_dust_Alambda_per_AV(ssp_wave)
-
-    elif dust_law == 8:
-        dust_Alambda_per_AV = ccm89_dust_Alambda_per_AV(ssp_wave)
-
-    elif dust_law == 9:
-        dust_Alambda_per_AV = fitzpatrick99_dust_Alambda_per_AV(ssp_wave)
-
-    # Always add IGM absorption
-    if igm_type == 0:
-        igm_trans = igm_att_madau(ssp_wave * (1.0+snap_z), snap_z)
-    elif igm_type == 1:
-        igm_trans = igm_att_inoue(ssp_wave * (1.0+snap_z), snap_z)
-    else:
-        print ('igm_type is not recognized! options are: 1 for Madau+1995 and Inoue+2014')
-        sys.exit()
+    if igm_type == 0: igm_trans = igm_att_madau(ssp_wave * (1.0+snap_z), snap_z)
+    else: igm_trans = igm_att_inoue(ssp_wave * (1.0+snap_z), snap_z)
 
 def dust_reddening_diffuse_ism(dust_AV, wave, dust_law):
-    if dust_law == 0:
-        dust_index1 = func_interp_dust_index(dust_AV)
-        bump_amp1 = bump_amp_from_dust_index(dust_index1)
-        Alambda = modified_calzetti_dust_Alambda_per_AV(wave, dust_index=dust_index1, bump_amp=bump_amp1) * dust_AV
+    dust_index1 = func_interp_dust_index(dust_AV)
+    bump_amp1 = bump_amp_from_dust_index(dust_index1) if dust_law == 0 else bump_amp
+    return modified_calzetti_dust_Alambda_per_AV(wave, dust_index=dust_index1, bump_amp=bump_amp1) * dust_AV
 
-    elif dust_law == 1:
-        dust_index1 = func_interp_dust_index(dust_AV)
-        Alambda = modified_calzetti_dust_Alambda_per_AV(wave, dust_index=dust_index1, bump_amp=bump_amp) * dust_AV
-
-    return Alambda
-
-
-# Modify _process_pixel_data to use global particle data and handle separate Doppler shifts
 def _process_pixel_data(ii, jj, star_particle_membership_list, gas_particle_membership_list):
     """
     ii=y jj=x
@@ -385,386 +331,159 @@ def _process_pixel_data(ii, jj, star_particle_membership_list, gas_particle_memb
     star_particle_membership_list: List of (original_particle_index, line_of_sight_distance) for THIS pixel.
     gas_particle_membership_list: List of (original_particle_index, line_of_sight_distance) for THIS pixel.
     """
-
-    # Use the pre-defined _worker_output_obs_wave_grid for the output spectra dimensions
     current_num_obs_wave_points = len(_worker_output_obs_wave_grid) if output_pixel_spectra_flag else 0
 
     pixel_results = {
-        'map_stars_mass': 0.0,
-        'map_mw_age': 0.0,
-        'map_stars_mw_zsol': 0.0,
-        'map_sfr_100': 0.0,
-        'map_sfr_30': 0.0,
-        'map_sfr_10': 0.0,
-        'map_gas_mass': 0.0,
-        'map_sfr_inst': 0.0,
-        'map_gas_mw_zsol': 0.0,
-        'map_dust_mean_tauV': 0.0,
-        'map_dust_mean_AV': 0.0,
-        'map_flux': np.zeros(len(_worker_filters)),
-        'map_flux_dust': np.zeros(len(_worker_filters)),
+        'map_stars_mass': 0.0, 'map_mw_age': 0.0, 'map_stars_mw_zsol': 0.0, 'map_sfr_100': 0.0,
+        'map_sfr_30': 0.0, 'map_sfr_10': 0.0, 'map_gas_mass': 0.0, 'map_sfr_inst': 0.0,
+        'map_gas_mw_zsol': 0.0, 'map_dust_mean_tauV': 0.0, 'map_dust_mean_AV': 0.0,
+        'map_flux': np.zeros(len(_worker_filters)), 'map_flux_dust': np.zeros(len(_worker_filters)),
         'obs_spectra_nodust_igm': np.zeros(current_num_obs_wave_points),
         'obs_spectra_dust_igm': np.zeros(current_num_obs_wave_points),
-        'map_lw_age_nodust': np.nan,
-        'map_lw_age_dust': np.nan,
-        'map_lw_zsol_nodust': np.nan,
-        'map_lw_zsol_dust': np.nan,
-        'map_stars_mw_vel_los': np.nan,
-        'map_gas_mw_vel_los': np.nan,
-        'map_stars_vel_disp_los': np.nan,
-        'map_gas_vel_disp_los': np.nan,
-        'map_lw_vel_los_nodust': np.nan,
-        'map_lw_vel_los_dust': np.nan,
-        'map_lw_vel_los_nebular': np.nan 
+        'map_lw_age_nodust': np.nan, 'map_lw_age_dust': np.nan, 'map_lw_zsol_nodust': np.nan, 'map_lw_zsol_dust': np.nan,
+        'map_stars_mw_vel_los': np.nan, 'map_gas_mw_vel_los': np.nan, 'map_stars_vel_disp_los': np.nan,
+        'map_gas_vel_disp_los': np.nan, 'map_lw_vel_los_nodust': np.nan, 'map_lw_vel_los_dust': np.nan, 'map_lw_vel_los_nebular': np.nan 
     }
 
     star_ids0 = np.asarray([x[0] for x in star_particle_membership_list], dtype=int)
     star_los_dist0 = np.asarray([x[1] for x in star_particle_membership_list])
-
-    # Access particle data from worker-global variables
-    stars_mass = _worker_stars_mass
-    stars_age = _worker_stars_age
-    stars_zmet = _worker_stars_zmet
-    stars_init_mass = _worker_stars_init_mass
-    stars_vel_los_proj = _worker_stars_vel_los_proj
-    stars_coords = _worker_stars_coords 
-
-    gas_mass = _worker_gas_mass
-    gas_sfr_inst = _worker_gas_sfr_inst
-    gas_zmet = _worker_gas_zmet
-    gas_log_temp = _worker_gas_log_temp
-    gas_mass_H = _worker_gas_mass_H
-    gas_vel_los_proj = _worker_gas_vel_los_proj
-    gas_coords = _worker_gas_coords 
-
-    idx_valid_stars_in_pixel = np.where((np.isnan(stars_mass[star_ids0]) == False) &
-                                        (np.isnan(stars_age[star_ids0]) == False) &
-                                        (np.isnan(stars_zmet[star_ids0]) == False) &
-                                        (np.isnan(stars_vel_los_proj[star_ids0]) == False))[0]
-    star_ids = star_ids0[idx_valid_stars_in_pixel]
-    star_los_dist = star_los_dist0[idx_valid_stars_in_pixel]
+    idx_valid_stars = np.where(~np.isnan(_worker_stars_mass[star_ids0]) & ~np.isnan(_worker_stars_age[star_ids0]) & ~np.isnan(_worker_stars_zmet[star_ids0]) & ~np.isnan(_worker_stars_vel_los_proj[star_ids0]))[0]
+    star_ids, star_los_dist = star_ids0[idx_valid_stars], star_los_dist0[idx_valid_stars]
 
     gas_ids0 = np.asarray([x[0] for x in gas_particle_membership_list], dtype=int)
     gas_los_dist0 = np.asarray([x[1] for x in gas_particle_membership_list])
+    idxg = np.where(~np.isnan(_worker_gas_mass[gas_ids0]) & ~np.isnan(_worker_gas_vel_los_proj[gas_ids0]))[0]
+    gas_ids, gas_los_dist = gas_ids0[idxg], gas_los_dist0[idxg]
+
+    m_sum = np.nansum(_worker_stars_mass[star_ids])
+    pixel_results['map_stars_mass'] = m_sum
+    if m_sum > 0:
+        pixel_results['map_mw_age'] = np.nansum(_worker_stars_mass[star_ids] * _worker_stars_age[star_ids]) / m_sum
+        pixel_results['map_stars_mw_zsol'] = np.nansum(_worker_stars_mass[star_ids] * _worker_stars_zmet[star_ids] / FSPS_Z_SUN) / m_sum
+        pixel_results['map_stars_mw_vel_los'] = np.nansum(_worker_stars_mass[star_ids] * _worker_stars_vel_los_proj[star_ids]) / m_sum
+        pixel_results['map_stars_vel_disp_los'] = np.sqrt(np.nansum(_worker_stars_mass[star_ids] * (_worker_stars_vel_los_proj[star_ids] - pixel_results['map_stars_mw_vel_los'])**2) / m_sum)
+
+    pixel_results['map_sfr_100'] = np.nansum(_worker_stars_init_mass[star_ids[_worker_stars_age[star_ids] <= 0.1]]) / 1e8
+    pixel_results['map_sfr_30'] = np.nansum(_worker_stars_init_mass[star_ids[_worker_stars_age[star_ids] <= 0.03]]) / 3e7
+    pixel_results['map_sfr_10'] = np.nansum(_worker_stars_init_mass[star_ids[_worker_stars_age[star_ids] <= 0.01]]) / 1e7
     
-    idxg = np.where((np.isnan(gas_mass[gas_ids0]) == False) &
-                    (np.isnan(gas_vel_los_proj[gas_ids0]) == False))[0]
-    gas_ids = gas_ids0[idxg]
-    gas_los_dist = gas_los_dist0[idxg]
-
-    current_stars_mass_sum = np.nansum(stars_mass[star_ids])
-    pixel_results['map_stars_mass'] = current_stars_mass_sum
-
-    if current_stars_mass_sum > 0:
-        pixel_results['map_mw_age'] = np.nansum(stars_mass[star_ids] * stars_age[star_ids]) / current_stars_mass_sum
-        pixel_results['map_stars_mw_zsol'] = np.nansum(stars_mass[star_ids] * stars_zmet[star_ids] / FSPS_Z_SUN) / current_stars_mass_sum
-        pixel_results['map_stars_mw_vel_los'] = np.nansum(stars_mass[star_ids] * stars_vel_los_proj[star_ids]) / current_stars_mass_sum
-        pixel_results['map_stars_vel_disp_los'] = np.sqrt(np.nansum(stars_mass[star_ids] * (stars_vel_los_proj[star_ids] - pixel_results['map_stars_mw_vel_los'])**2) / current_stars_mass_sum)
-    else:
-        pixel_results['map_mw_age'] = np.nan
-        pixel_results['map_stars_mw_zsol'] = np.nan
-        pixel_results['map_stars_mw_vel_los'] = np.nan
-        pixel_results['map_stars_vel_disp_los'] = np.nan
-
-    idxs3_100 = np.where((np.isnan(stars_init_mass[star_ids]) == False) & (stars_age[star_ids] <= 0.1))[0]
-    pixel_results['map_sfr_100'] = np.nansum(stars_init_mass[star_ids[idxs3_100]]) / 0.1 / 1e+9
-
-    idxs3_30 = np.where((np.isnan(stars_init_mass[star_ids]) == False) & (stars_age[star_ids] <= 0.03))[0]
-    pixel_results['map_sfr_30'] = np.nansum(stars_init_mass[star_ids[idxs3_30]]) / 0.03 / 1e+9
-
-    idxs3_10 = np.where((np.isnan(stars_init_mass[star_ids]) == False) & (stars_age[star_ids] <= 0.01))[0]
-    pixel_results['map_sfr_10'] = np.nansum(stars_init_mass[star_ids[idxs3_10]]) / 0.01 / 1e+9
-
-    current_gas_mass_sum = np.nansum(gas_mass[gas_ids])
-    pixel_results['map_gas_mass'] = current_gas_mass_sum
-    pixel_results['map_sfr_inst'] = np.nansum(gas_sfr_inst[gas_ids])
-
-    if current_gas_mass_sum > 0:
-        pixel_results['map_gas_mw_zsol'] = np.nansum(gas_mass[gas_ids] * gas_zmet[gas_ids] / FSPS_Z_SUN) / current_gas_mass_sum
-        pixel_results['map_gas_mw_vel_los'] = np.nansum(gas_mass[gas_ids] * gas_vel_los_proj[gas_ids]) / current_gas_mass_sum
-        pixel_results['map_gas_vel_disp_los'] = np.sqrt(np.nansum(gas_mass[gas_ids] * (gas_vel_los_proj[gas_ids] - pixel_results['map_gas_mw_vel_los'])**2) / current_gas_mass_sum)
-    else:
-        pixel_results['map_gas_mw_zsol'] = np.nan
-        pixel_results['map_gas_mw_vel_los'] = np.nan
-        pixel_results['map_gas_vel_disp_los'] = np.nan
+    g_sum = np.nansum(_worker_gas_mass[gas_ids])
+    pixel_results['map_gas_mass'], pixel_results['map_sfr_inst'] = g_sum, np.nansum(_worker_gas_sfr_inst[gas_ids])
+    if g_sum > 0:
+        pixel_results['map_gas_mw_zsol'] = np.nansum(_worker_gas_mass[gas_ids] * _worker_gas_zmet[gas_ids] / FSPS_Z_SUN) / g_sum
+        pixel_results['map_gas_mw_vel_los'] = np.nansum(_worker_gas_mass[gas_ids] * _worker_gas_vel_los_proj[gas_ids]) / g_sum
+        pixel_results['map_gas_vel_disp_los'] = np.sqrt(np.nansum(_worker_gas_mass[gas_ids] * (_worker_gas_vel_los_proj[gas_ids] - pixel_results['map_gas_mw_vel_los'])**2) / g_sum)
 
     if len(star_ids) > 0:
-
-        array_spec = []
-        array_spec_dust = []
-        array_AV = []
-        array_tauV = []
-        array_L_nodust = []
-        array_L_dust = []
+        array_spec, array_spec_dust, array_AV, array_tauV, array_L_nodust, array_L_dust = [], [], [], [], [], []
+        if output_pixel_spectra_flag: array_vel_los, array_L_nebular, array_vel_los_nebular_weighted = [], [], []
         
-        # Initialize Doppler/Luminosity weighted arrays only if spectra are requested
-        if output_pixel_spectra_flag:
-            array_vel_los = [] # For stellar light-weighted velocity
-            array_L_nebular = [] 
-            array_vel_los_nebular_weighted = []
-
-        wave = ssp_wave
-
-        # Define the rest-frame wavelength range for light-weighting
-        lw_wave_idx = np.where((wave >= _lw_wave_min_rest) & (wave <= _lw_wave_max_rest))[0]
-        if lw_wave_idx.size == 0:
-            # If no wavelengths fall in range, light-weighted quantities will be NaN
-            pass
+        lw_wave_idx = np.where((ssp_wave >= _lw_wave_min_rest) & (ssp_wave <= _lw_wave_max_rest))[0]
 
         for i_sid in range(len(star_ids)):
             star_id = star_ids[i_sid]
-            star_vel_los_current = stars_vel_los_proj[star_id]
-            star_coords_current = stars_coords[star_id] 
-
-            # --- Get Stellar Continuum and Nebular Emission Spectra ---
-            spec_stellar_continuum = None
-            spec_nebular_emission = None
-
             if use_precomputed_ssp:
-                # Convert simulation metallicity (Z/Z_primordial_solar) to log(Z/Z_ssp_code_solar)
-                particle_logzsol_ssp_code = np.log10(stars_zmet[star_id]/ssp_code_z_sun)
-                
-                points = np.array([[stars_age[star_id], particle_logzsol_ssp_code]])
-
-                if ssp_interpolation_method == 'linear':
-                    spec_stellar_continuum = _global_ssp_stellar_continuum_interpolator(points)[0]
-                    spec_nebular_emission = _global_ssp_nebular_emission_interpolator(points)[0]
-                    ssp_mass_formed = _global_ssp_stellar_mass_interpolator(points)[0]
-                elif ssp_interpolation_method == 'cubic':
-                    spec_stellar_continuum = _global_ssp_stellar_continuum_interpolator(points)[0]
-                    spec_nebular_emission = _global_ssp_nebular_emission_interpolator(points)[0]
-                    ssp_mass_formed = _global_ssp_stellar_mass_interpolator(points)[0]
-                else: # 'nearest' method
-                    age_idx = np.argmin(np.abs(ssp_ages_gyr - stars_age[star_id]))
-                    z_idx = np.argmin(np.abs(ssp_logzsol_grid - particle_logzsol_ssp_code))
-                    
-                    spec_stellar_continuum = ssp_stellar_continuum_grid[age_idx, z_idx, :]
-                    spec_nebular_emission = ssp_nebular_emission_grid[age_idx, z_idx, :]
-                    ssp_mass_formed = ssp_stellar_mass_grid[age_idx, z_idx]
-            else: # On-the-fly FSPS
-                logzsol = np.log10(stars_zmet[star_id]/FSPS_Z_SUN)
-                sp_instance.params["logzsol"] = logzsol   
-                sp_instance.params['gas_logz'] = logzsol
-
-                # Get total spectrum (stellar + nebular)
+                particle_logzsol = np.log10(_worker_stars_zmet[star_id]/ssp_code_z_sun)
+                pts = np.array([[ _worker_stars_age[star_id], particle_logzsol]])
+                if ssp_interpolation_method in ['linear', 'cubic']:
+                    s_cont = _global_ssp_stellar_continuum_interpolator(pts)[0]
+                    n_em = _global_ssp_nebular_emission_interpolator(pts)[0]
+                    s_mass = _global_ssp_stellar_mass_interpolator(pts)[0]
+                else:
+                    a_idx, z_idx = np.argmin(np.abs(ssp_ages_gyr - _worker_stars_age[star_id])), np.argmin(np.abs(ssp_logzsol_grid - particle_logzsol))
+                    s_cont, n_em, s_mass = ssp_stellar_continuum_grid[a_idx, z_idx, :], ssp_nebular_emission_grid[a_idx, z_idx, :], ssp_stellar_mass_grid[a_idx, z_idx]
+            else:
+                # FSPS on-the-fly logic
+                logzsol = np.log10(_worker_stars_zmet[star_id]/FSPS_Z_SUN)
+                sp_instance.params["logzsol"], sp_instance.params['gas_logz'] = logzsol, logzsol
                 sp_instance.params["add_neb_emission"] = 1
-                _, spec_total_from_fsps = sp_instance.get_spectrum(peraa=True, tage=stars_age[star_id])
-                
-                # Get stellar continuum only spectrum
+                _, s_tot = sp_instance.get_spectrum(peraa=True, tage=_worker_stars_age[star_id])
                 sp_instance.params["add_neb_emission"] = 0
-                _, spec_stellar_continuum = sp_instance.get_spectrum(peraa=True, tage=stars_age[star_id])
+                _, s_cont = sp_instance.get_spectrum(peraa=True, tage=_worker_stars_age[star_id])
+                n_em, s_mass = s_tot - s_cont, sp_instance.stellar_mass
 
-                # Get nebular emission by subtraction
-                spec_nebular_emission = spec_total_from_fsps - spec_stellar_continuum
-                ssp_mass_formed = sp_instance.stellar_mass
-
-            norm = stars_mass[star_id] / ssp_mass_formed
-
-            # --- Apply Doppler shifts only if outputting spectra (IFS data) ---
+            norm = _worker_stars_mass[star_id] / s_mass
             if output_pixel_spectra_flag:
-                # 1. Stellar Continuum Doppler Shift
-                wave_doppler_stellar, spec_stellar_continuum_doppler = doppler_shift_spectrum(wave, spec_stellar_continuum, star_vel_los_current)
-                spec_stellar_continuum_interp = interp1d(wave_doppler_stellar, spec_stellar_continuum_doppler, kind='linear', bounds_error=False, fill_value=0.0)(wave)
-
-                # 2. Determine gas velocity for Nebular Emission (expensive step)
-                gas_vel_los_avg_for_nebular = 0.0 # Default if no suitable gas is found
-
-                # Find gas particles in front of the star, star-forming, and within 300 pc 3D distance
-                idxg_front = np.where(gas_los_dist < star_los_dist[i_sid])[0]
-                front_gas_ids = gas_ids[idxg_front] 
-                
-                idx_sf_gas_in_front = np.where(gas_sfr_inst[front_gas_ids] > 0.0)[0]
-                sf_gas_ids_pre_distance_filter = front_gas_ids[idx_sf_gas_in_front]
-
-                if len(sf_gas_ids_pre_distance_filter) > 0:
-                    # Calculate 3D distance from star to gas particles
-                    # Need to use the full 3D coordinates for distance calculation
-                    # stars_coords_current is (3,) array; gas_coords[ids] is (N, 3) array
-                    dist_3d = np.linalg.norm(star_coords_current - gas_coords[sf_gas_ids_pre_distance_filter], axis=1)
-                    idx_within_dist = np.where(dist_3d < 0.3)[0] # 0.3 kpc for 300 pc
-                    sf_gas_ids_for_nebular = sf_gas_ids_pre_distance_filter[idx_within_dist]
-                else:
-                    sf_gas_ids_for_nebular = np.array([], dtype=int)
-
-
-                if len(sf_gas_ids_for_nebular) > 0:
-                    gas_mass_sum = np.nansum(gas_mass[sf_gas_ids_for_nebular])
-                    if gas_mass_sum > 0:
-                        gas_vel_los_avg_for_nebular = np.nansum(gas_mass[sf_gas_ids_for_nebular] * gas_vel_los_proj[sf_gas_ids_for_nebular]) / gas_mass_sum
-                
-                # 3. Nebular Emission Doppler Shift
-                wave_doppler_nebular, spec_nebular_emission_doppler = doppler_shift_spectrum(wave, spec_nebular_emission, gas_vel_los_avg_for_nebular)
-                spec_nebular_emission_interp = interp1d(wave_doppler_nebular, spec_nebular_emission_doppler, kind='linear', bounds_error=False, fill_value=0.0)(wave)
-                
-                # --- Combine Doppler-shifted components ---
-                spec = spec_stellar_continuum_interp + spec_nebular_emission_interp
-
-                # Populate arrays for light-weighted velocity calculations
-                array_vel_los.append(star_vel_los_current)
-                array_vel_los_nebular_weighted.append(gas_vel_los_avg_for_nebular)
-
-                if lw_wave_idx.size > 1: # Need at least 2 points to integrate
-                    L_nebular_particle = simpson(spec_nebular_emission_interp[lw_wave_idx]*norm, wave[lw_wave_idx])
-                else:
-                    L_nebular_particle = 0.0
-                array_L_nebular.append(L_nebular_particle)
-
+                w_d_s, s_c_d = doppler_shift_spectrum(ssp_wave, s_cont, _worker_stars_vel_los_proj[star_id])
+                s_c_i = interp1d(w_d_s, s_c_d, kind='linear', bounds_error=False, fill_value=0.0)(ssp_wave)
+                g_v_neb, idxg_f = 0.0, np.where(gas_los_dist < star_los_dist[i_sid])[0]
+                sf_g = gas_ids[idxg_f][_worker_gas_sfr_inst[gas_ids[idxg_f]] > 0.0]
+                if sf_g.size > 0:
+                    d3d = np.linalg.norm(_worker_stars_coords[star_id] - _worker_gas_coords[sf_g], axis=1)
+                    sf_g_near = sf_g[d3d < 0.3]
+                    if sf_g_near.size > 0 and np.nansum(_worker_gas_mass[sf_g_near]) > 0:
+                        g_v_neb = np.nansum(_worker_gas_mass[sf_g_near] * _worker_gas_vel_los_proj[sf_g_near]) / np.nansum(_worker_gas_mass[sf_g_near])
+                w_d_n, n_e_d = doppler_shift_spectrum(ssp_wave, n_em, g_v_neb)
+                n_e_i = interp1d(w_d_n, n_e_d, kind='linear', bounds_error=False, fill_value=0.0)(ssp_wave)
+                spec = s_c_i + n_e_i
+                array_vel_los.append(_worker_stars_vel_los_proj[star_id])
+                array_vel_los_nebular_weighted.append(g_v_neb)
+                array_L_nebular.append(simpson(n_e_i[lw_wave_idx]*norm, ssp_wave[lw_wave_idx]) if lw_wave_idx.size > 1 else 0.0)
             else:
-                # --- Skip Doppler shifts (for imaging only) ---
-                spec = spec_stellar_continuum + spec_nebular_emission
-                star_vel_los_current = 0.0 # Velocity values are irrelevant and skipped
+                spec = s_cont + n_em
 
-            spec_dust = spec.copy() # Initialize spec_dust with original combined spec
-
-            # --- Apply dust attenuation from diffuse ISM ---
-            # The filtering for cold_front_gas_ids is needed for dust calculation regardless of spectra output
-            idxg_front_dust = np.where(gas_los_dist < star_los_dist[i_sid])[0]
-            front_gas_ids_dust = gas_ids[idxg_front_dust]
-            idx_cold_gas_for_dust = np.where((gas_sfr_inst[front_gas_ids_dust] > 0.0) | (gas_log_temp[front_gas_ids_dust] < 3.9))[0]
-            cold_front_gas_ids = front_gas_ids_dust[idx_cold_gas_for_dust]
-
-            dust_AV = 0.0
-            if len(cold_front_gas_ids) > 0:
-                gas_mass_sum_dust = np.nansum(gas_mass[cold_front_gas_ids])
-                if gas_mass_sum_dust > 0:
-                    temp_mw_gas_zsol = np.nansum(gas_mass[cold_front_gas_ids]*gas_zmet[cold_front_gas_ids]/FSPS_Z_SUN)/gas_mass_sum_dust
-                    nH = np.nansum(gas_mass_H[cold_front_gas_ids])*1.247914e+14/pix_area_kpc2
-                    tauV = _worker_scale_dust_tau * temp_mw_gas_zsol * nH / 2.1e+21
-                    # Ensure tauV is non-negative before log10 call
-                    tauV = np.clip(tauV, 1e-10, None) 
-                    dust_AV = -2.5*np.log10((1.0 - np.exp(-1.0*tauV))/tauV)
-
-                    if not (np.isnan(dust_AV) or dust_AV == 0.0):
-                        if dust_law <= 1:
-                            Alambda = dust_reddening_diffuse_ism(dust_AV, wave, dust_law)
-                        else:
-                            Alambda = dust_Alambda_per_AV * dust_AV
-                        
-                        spec_dust = spec_dust*np.power(10.0, -0.4*Alambda)
-                        array_tauV.append(tauV)
-                        array_AV.append(dust_AV)
+            spec_dust, d_AV = spec.copy(), 0.0
+            idx_c = np.where((gas_los_dist < star_los_dist[i_sid]) & ((_worker_gas_sfr_inst[gas_ids] > 0.0) | (_worker_gas_log_temp[gas_ids] < 3.9)))[0]
+            if idx_c.size > 0:
+                g_m_s = np.nansum(_worker_gas_mass[gas_ids[idx_c]])
+                if g_m_s > 0:
+                    g_z = np.nansum(_worker_gas_mass[gas_ids[idx_c]]*_worker_gas_zmet[gas_ids[idx_c]]/FSPS_Z_SUN)/g_m_s
+                    nH = np.nansum(_worker_gas_mass_H[gas_ids[idx_c]])*1.247914e+14/pix_area_kpc2
+                    tauV = np.clip(_worker_scale_dust_tau * g_z * nH / 2.1e+21, 1e-10, None)
+                    d_AV = -2.5*np.log10((1.0 - np.exp(-1.0*tauV))/tauV)
+                    if d_AV > 0:
+                        al = dust_reddening_diffuse_ism(d_AV, ssp_wave, dust_law) if dust_law <= 1 else dust_Alambda_per_AV * d_AV
+                        spec_dust *= 10.0**(-0.4*al)
+                        array_tauV.append(tauV); array_AV.append(d_AV)
             
-            # --- Apply dust attenuation from birth clouds ---
-            if stars_age[star_id] <= t_esc:
-                # Use the calculated diffuse dust_AV or 0.0 if not calculated
-                Alambda = unresolved_dust_birth_cloud_Alambda_per_AV(wave, dust_index_bc=dust_index_bc) * dust_AV * dust_eta
-                spec_dust = spec_dust*np.power(10.0, -0.4*Alambda)
-    
-            #norm = stars_mass[star_id] / ssp_mass_formed
+            if _worker_stars_age[star_id] <= t_esc:
+                al_bc = unresolved_dust_birth_cloud_Alambda_per_AV(ssp_wave, dust_index_bc=dust_index_bc) * d_AV * dust_eta
+                spec_dust *= 10.0**(-0.4*al_bc)
 
-            if len(np.asarray(spec_dust).shape) == 1:
-                array_spec.append(spec*norm)
-                array_spec_dust.append(spec_dust*norm)
-
-                # Calculate luminosity for light-weighting
-                # Integrate over specified rest-frame wavelength range
-                if lw_wave_idx.size > 1: # Need at least 2 points to integrate
-                    L_nodust_particle = simpson(spec[lw_wave_idx]*norm, wave[lw_wave_idx])
-                    L_dust_particle = simpson(spec_dust[lw_wave_idx]*norm, wave[lw_wave_idx])
-                else: # No valid wavelength range for integration
-                    L_nodust_particle = 0.0
-                    L_dust_particle = 0.0
-                
-                array_L_nodust.append(L_nodust_particle)
-                array_L_dust.append(L_dust_particle)
-                
-        array_AV, array_tauV = np.asarray(array_AV), np.asarray(array_tauV)
-        if array_AV.size == 0:
-            mean_AV = np.nan
-            mean_tauV = np.nan
-        else:
-            mean_AV = np.nanmean(np.asarray(array_AV))
-            mean_tauV = np.nanmean(np.asarray(array_tauV))
-
-        redshift_flux, redshift_flux_dust = [], []
-        
-        if len(array_spec) > 0:
-            spec_lum = np.nansum(array_spec, axis=0)
-            spec_lum_dust = np.nansum(array_spec_dust, axis=0)
-
-            # cosmological redshifting is always applied for filtering and spectral output
-            spec_wave_obs, spec_flux_obs = cosmo_redshifting(wave, spec_lum, snap_z, _worker_cosmo)
-            spec_wave_obs, spec_flux_dust_obs = cosmo_redshifting(wave, spec_lum_dust, snap_z, _worker_cosmo)
-
-            spec_flux_obs_igm = spec_flux_obs * igm_trans
-            spec_flux_dust_obs_igm = spec_flux_dust_obs * igm_trans
-
-            if output_pixel_spectra_flag:
-                # Interpolate onto the fixed output observed-frame wavelength grid
-                if _worker_output_obs_wave_grid.size > 0:
-                    interp_func_nodust = interp1d(spec_wave_obs, spec_flux_obs_igm, kind='linear', 
-                                                  bounds_error=False, fill_value=0.0)
-                    interp_func_dust = interp1d(spec_wave_obs, spec_flux_dust_obs_igm, kind='linear', 
-                                                bounds_error=False, fill_value=0.0)
-                    
-                    pixel_results['obs_spectra_nodust_igm'] = interp_func_nodust(_worker_output_obs_wave_grid)
-                    pixel_results['obs_spectra_dust_igm'] = interp_func_dust(_worker_output_obs_wave_grid)
-                else:
-                    # If the target output grid is empty, ensure the output spectra arrays are also empty
-                    pixel_results['obs_spectra_nodust_igm'] = np.zeros(0)
-                    pixel_results['obs_spectra_dust_igm'] = np.zeros(0)
-
-
-            nbands = len(_worker_filters)
-            redshift_flux = np.zeros(nbands)
-            redshift_flux_dust = np.zeros(nbands)
-
-            for i_band in range(nbands):
-                redshift_flux[i_band] = filtering(spec_wave_obs, spec_flux_obs_igm, _worker_filter_transmission[_worker_filters[i_band]]['wave'], _worker_filter_transmission[_worker_filters[i_band]]['trans'])
-                redshift_flux_dust[i_band] = filtering(spec_wave_obs, spec_flux_dust_obs_igm, _worker_filter_transmission[_worker_filters[i_band]]['wave'], _worker_filter_transmission[_worker_filters[i_band]]['trans'])
-
-            if len(redshift_flux) > 0:
-                pixel_results['map_flux'] = redshift_flux
-                pixel_results['map_flux_dust'] = redshift_flux_dust
-
-                pixel_results['map_dust_mean_tauV'] = mean_tauV
-                pixel_results['map_dust_mean_AV'] = mean_AV
-
-            # Calculate Light-weighted age and metallicity (stellar light)
-            total_L_nodust = np.nansum(array_L_nodust)
-            total_L_dust = np.nansum(array_L_dust)
-
-            if total_L_nodust > 0:
-                pixel_results['map_lw_age_nodust'] = np.nansum(np.asarray(array_L_nodust) * stars_age[star_ids]) / total_L_nodust
-                pixel_results['map_lw_zsol_nodust'] = np.nansum(np.asarray(array_L_nodust) * stars_zmet[star_ids] / FSPS_Z_SUN) / total_L_nodust
-            else:
-                pixel_results['map_lw_age_nodust'] = np.nan
-                pixel_results['map_lw_zsol_nodust'] = np.nan
-
-            if total_L_dust > 0:
-                pixel_results['map_lw_age_dust'] = np.nansum(np.asarray(array_L_dust) * stars_age[star_ids]) / total_L_dust
-                pixel_results['map_lw_zsol_dust'] = np.nansum(np.asarray(array_L_dust) * stars_zmet[star_ids] / FSPS_Z_SUN) / total_L_dust
-            else:
-                pixel_results['map_lw_age_dust'] = np.nan
-                pixel_results['map_lw_zsol_dust'] = np.nan
-
+            array_spec.append(spec*norm); array_spec_dust.append(spec_dust*norm)
+            array_L_nodust.append(simpson(spec[lw_wave_idx]*norm, ssp_wave[lw_wave_idx]) if lw_wave_idx.size > 1 else 0.0)
+            array_L_dust.append(simpson(spec_dust[lw_wave_idx]*norm, ssp_wave[lw_wave_idx]) if lw_wave_idx.size > 1 else 0.0)
             
-            # --- Light-weighted velocity maps only calculated if output_pixel_spectra_flag is True ---
+        pixel_results['map_dust_mean_AV'] = np.nanmean(array_AV) if array_AV else np.nan
+        pixel_results['map_dust_mean_tauV'] = np.nanmean(array_tauV) if array_tauV else np.nan
+
+        if array_spec:
+            s_lum, s_lum_d = np.nansum(array_spec, axis=0), np.nansum(array_spec_dust, axis=0)
+            w_o, f_o = cosmo_redshifting(ssp_wave, s_lum, snap_z, _worker_cosmo)
+            _, f_o_d = cosmo_redshifting(ssp_wave, s_lum_d, snap_z, _worker_cosmo)
+            f_o_i, f_o_d_i = f_o * igm_trans, f_o_d * igm_trans
+
+            if output_pixel_spectra_flag and _worker_output_obs_wave_grid.size > 0:
+                pixel_results['obs_spectra_nodust_igm'] = interp1d(w_o, f_o_i, kind='linear', bounds_error=False, fill_value=0.0)(_worker_output_obs_wave_grid)
+                pixel_results['obs_spectra_dust_igm'] = interp1d(w_o, f_o_d_i, kind='linear', bounds_error=False, fill_value=0.0)(_worker_output_obs_wave_grid)
+
+            pixel_results['map_flux'] = [filtering(w_o, f_o_i, _worker_filter_transmission[f]['wave'], _worker_filter_transmission[f]['trans']) for f in _worker_filters]
+            pixel_results['map_flux_dust'] = [filtering(w_o, f_o_d_i, _worker_filter_transmission[f]['wave'], _worker_filter_transmission[f]['trans']) for f in _worker_filters]
+
+            L_n, L_d = np.nansum(array_L_nodust), np.nansum(array_L_dust)
+            if L_n > 0:
+                pixel_results['map_lw_age_nodust'] = np.nansum(np.asarray(array_L_nodust) * _worker_stars_age[star_ids]) / L_n
+                pixel_results['map_lw_zsol_nodust'] = np.nansum(np.asarray(array_L_nodust) * _worker_stars_zmet[star_ids] / FSPS_Z_SUN) / L_n
+            if L_d > 0:
+                pixel_results['map_lw_age_dust'] = np.nansum(np.asarray(array_L_dust) * _worker_stars_age[star_ids]) / L_d
+                pixel_results['map_lw_zsol_dust'] = np.nansum(np.asarray(array_L_dust) * _worker_stars_zmet[star_ids] / FSPS_Z_SUN) / L_d
+            
             if output_pixel_spectra_flag:
-                array_vel_los = np.asarray(array_vel_los)
-                
-                if total_L_nodust > 0:
-                    pixel_results['map_lw_vel_los_nodust'] = np.nansum(np.asarray(array_L_nodust) * array_vel_los) / total_L_nodust
-                else:
-                    pixel_results['map_lw_vel_los_nodust'] = np.nan # Already initialized to nan
+                v_los = np.asarray(array_vel_los)
+                arr_L_nodust = np.asarray(array_L_nodust)
+                arr_L_dust = np.asarray(array_L_dust)
+                arr_L_nebular = np.asarray(array_L_nebular) if array_L_nebular else np.asarray([])
+                arr_v_neb_weight = np.asarray(array_vel_los_nebular_weighted) if array_vel_los_nebular_weighted else np.asarray([])
 
-                if total_L_dust > 0:
-                    pixel_results['map_lw_vel_los_dust'] = np.nansum(np.asarray(array_L_dust) * array_vel_los) / total_L_dust
-                else:
-                    pixel_results['map_lw_vel_los_dust'] = np.nan # Already initialized to nan
+                if L_n > 0: pixel_results['map_lw_vel_los_nodust'] = np.nansum(arr_L_nodust * v_los) / L_n
+                if L_d > 0: pixel_results['map_lw_vel_los_dust'] = np.nansum(arr_L_dust * v_los) / L_d
+                if arr_L_nebular.size > 0 and np.nansum(arr_L_nebular) > 0:
+                    pixel_results['map_lw_vel_los_nebular'] = np.nansum(arr_L_nebular * arr_v_neb_weight) / np.nansum(arr_L_nebular)
 
-                total_L_nebular = np.nansum(array_L_nebular)
-                if total_L_nebular > 0:
-                    pixel_results['map_lw_vel_los_nebular'] = np.nansum(np.asarray(array_L_nebular) * array_vel_los_nebular_weighted) / total_L_nebular
-                else:
-                    pixel_results['map_lw_vel_los_nebular'] = np.nan # Already initialized to nan
-            # --- End Light-weighted velocity block ---
-                
     return ii, jj, pixel_results
 
-
-def generate_images(sim_file, z, filters, filter_transmission_path, dim_kpc=None,
-                    pix_arcsec=None, pix_kpc=0.1, flux_unit='MJy/sr', polar_angle_deg=0, azimuth_angle_deg=0,
+def generate_images(sim_file, z, filters, filter_transmission_path, smoothing_length=0.15, dim_kpc=None,
+                    pix_arcsec=0.1, pix_kpc=None, flux_unit='MJy/sr', polar_angle_deg=0, azimuth_angle_deg=0,
                     name_out_img=None, n_jobs=-1, ssp_code='FSPS', imf_type=1, imf_upper_limit=120.0, imf_lower_limit=0.08,
                     imf1=1.3, imf2=2.3, imf3=2.3, vdmc=0.08, mdave=0.5, gas_logu=-2.0,
                     igm_type=0, dust_index_bc=-0.7, dust_index=0.0, t_esc=0.01, dust_eta=1.0,
@@ -773,7 +492,8 @@ def generate_images(sim_file, z, filters, filter_transmission_path, dim_kpc=None
                     salim_a1=2.71, salim_a2= -0.191, salim_a3=0.0121, salim_RV=3.15, salim_B=3.15,
                     initdim_kpc=200, initdim_mass_fraction=0.99, use_precomputed_ssp=True, 
                     ssp_filepath=None, ssp_interpolation_method='nearest', 
-                    output_pixel_spectra=False, rest_wave_min=1000.0, rest_wave_max=30000.0, rest_delta_wave=5.0): 
+                    output_pixel_spectra=False, rest_wave_min=1000.0, rest_wave_max=30000.0, 
+                    rest_delta_wave=5.0):
     """
     Generates astrophysical images from HDF5 simulation data with parallelized pixel calculations.
     Allows choice between using pre-computed SSP spectra from an HDF5 file or
@@ -788,8 +508,9 @@ def generate_images(sim_file, z, filters, filter_transmission_path, dim_kpc=None
                                          Keys are filter names, values are file paths. Each text file has
                                          two columns: wavelength, transmission.
         dim_kpc (float, optional): Dimension of the image in kpc. If None, assigned automatically. Defaults to None.
-        pix_arcsec (float, optional): Pixel size in arcseconds. Defaults to None.
-        pix_kpc (float, optional): Pixel size in physical unit kpc. Defaults to 0.1. If pix_kpc is provided, pix_arcsec input will be ignored but converted from pix_kpc (given z) instead.
+        smoothing_length (float, optional): Smoothing length of the simulation in kpc. Defaults to 0.15.
+        pix_arcsec (float, optional): Pixel size in arcseconds. Defaults to 0.1. If pix_arcsec is provided, pix_kpc input will be ignored but converted from pix_arcsec (given z) instead.
+        pix_kpc (float, optional): Pixel size in physical unit kpc. Defaults to None.
         flux_unit (string, optional): Desired flux unit for the generated images. Options are: 'MJy/sr', 'nJy', 'AB magnitude', or 'erg/s/cm2/A'. Default to 'MJy/sr'.
         polar_angle_deg (float, optional): Polar angle for projection. Defaults to 0.
         azimuth_angle_deg (float, optional): Azimuth angle for projection. Defaults to 0.
@@ -833,276 +554,160 @@ def generate_images(sim_file, z, filters, filter_transmission_path, dim_kpc=None
         rest_wave_min (float, optional): Minimum rest-frame wavelength for output spectra (Angstrom). Defaults to 1000.0.
         rest_wave_max (float, optional): Maximum rest-frame wavelength for output spectra (Angstrom). Defaults to 30000.0.
         rest_delta_wave (float, optional): Incremental wavelength in rest-frame for output spectra (Angstrom). Defaults to 5.0.
-    """
+    """ 
 
     cosmo = define_cosmo(cosmo_str)
-
     print ('Processing '+sim_file)
-    # --- Data Loading and Initial Calculations (Sequential) ---
+    f_t_g, f_w_p_g = _load_filter_transmission_from_paths(filters, filter_transmission_path)
+    snap_z, snap_a, snap_univ_age = z, 1.0/(1.0 + z), cosmo.age(z).value
 
-    # Load filter transmission and pivot wavelengths once for the main process
-    filter_transmission_data_global, filter_wave_pivot_data_global = _load_filter_transmission_from_paths(filters, filter_transmission_path)
-
-    snap_z = z
-    snap_a = 1.0/(1.0 + snap_z)
-    snap_univ_age = cosmo.age(snap_z).value
-
-    # handle pix_kpc overriding pix_arcsec
-    if pix_kpc is not None:
-        if pix_arcsec is None:
-            pix_arcsec = physical_to_angular(snap_z, pix_kpc, cosmo)
-    else:
-        if pix_arcsec is None:
-            raise ValueError("Either pix_kpc or pix_arcsec must be provided.")
+    if pix_arcsec is not None:
         pix_kpc = angular_to_physical(snap_z, pix_arcsec, cosmo)
+    else:
+        if pix_kpc is None: 
+            print ('Both pix_arcsec and pix_kpc cannot be None!')
+            sys.exit()
+        else:
+            pix_arcsec = physical_to_angular(snap_z, pix_kpc, cosmo)  
 
-    pix_area_kpc2 = pix_kpc * pix_kpc
-    print('pixel size: %lf kpc (equivalent to %lf arcsec)' % (pix_kpc, pix_arcsec))
+    # Initial gridding based on smoothing length
+    working_pix_kpc = smoothing_length
+    pix_area_kpc2_working = working_pix_kpc**2
+    rebin_factor = pix_kpc / smoothing_length
 
-    f = h5py.File(sim_file,'r')
+    #rebin_factor = int(np.ceil(pix_kpc / smoothing_length))
+    #working_pix_kpc = pix_kpc / rebin_factor
+    #pix_area_kpc2_working = working_pix_kpc**2
+    #print(f'Working grid size: {working_pix_kpc:.4f} kpc (Rebin Factor: {rebin_factor})')
 
-    # get star particles data
-    stars_init_mass = f['star']['init_mass'][:]
-    stars_form_z = f['star']['form_z'][:]
-    stars_mass = f['star']['mass'][:]
-    stars_zmet = f['star']['zmet'][:]
-    stars_coords = f['star']['coords'][:]   # coordinates (N,3) in units of kpc
-    stars_vel = f['star']['vel'][:]         # velocities (N,3) in units km/s
+    with h5py.File(sim_file,'r') as f:
+        s_im, s_fz, s_m, s_z, s_c, s_v = f['star/init_mass'][:], f['star/form_z'][:], f['star/mass'][:], f['star/zmet'][:], f['star/coords'][:], f['star/vel'][:]
+        s_age = snap_univ_age - interp_age_univ_from_z(s_fz, cosmo)
+        idx = np.where(s_age>=0)[0]
+        s_im, s_m, s_z, s_age, s_c, s_v = s_im[idx], s_m[idx], s_z[idx], s_age[idx], s_c[idx,:], s_v[idx,:]
+        g_m, g_z, g_sfr, g_lt, g_c, g_v, g_mh = f['gas/mass'][:], f['gas/zmet'][:], f['gas/sfr_inst'][:], np.log10(f['gas/temp'][:]), f['gas/coords'][:], f['gas/vel'][:], f['gas/mass_H'][:]
 
-    stars_form_age_univ = interp_age_univ_from_z(stars_form_z, cosmo)
-    stars_age = snap_univ_age - stars_form_age_univ                 # age in Gyr
-
-    idx = np.where(stars_age>=0)[0]
-    stars_init_mass = stars_init_mass[idx]
-    stars_mass = stars_mass[idx]
-    stars_zmet = stars_zmet[idx]
-    stars_age = stars_age[idx]
-    stars_coords = stars_coords[idx,:]
-    stars_vel = stars_vel[idx,:]
-
-    # get gas particles data
-    gas_mass = f['gas']['mass'][:]
-    gas_zmet = f['gas']['zmet'][:]
-    gas_sfr_inst = f['gas']['sfr_inst'][:]
-    gas_log_temp = np.log10(f['gas']['temp'][:])
-    gas_coords = f['gas']['coords'][:]
-    gas_vel = f['gas']['vel'][:]
-    gas_mass_H = f['gas']['mass_H'][:]
-
-    f.close()
-
-    if dim_kpc is None:
-        dim_kpc = determine_image_size(stars_coords, stars_mass, pix_kpc, (initdim_kpc, initdim_kpc), 
-                                       polar_angle_deg, azimuth_angle_deg, gas_coords, gas_mass, 
+    if dim_kpc is None: 
+        dim_kpc = determine_image_size(s_c, s_m, working_pix_kpc, (initdim_kpc, initdim_kpc), 
+                                       polar_angle_deg, azimuth_angle_deg, g_c, g_m, 
                                        mass_percentage=initdim_mass_fraction, max_img_dim=initdim_kpc)
-
-    output_dimension = (dim_kpc, dim_kpc)
-    star_particle_membership, star_mass_density_map, central_pixel_coords, grid_info, gas_particle_membership, gas_mass_density_map, stars_vel_los_proj, gas_vel_los_proj = get_2d_density_projection_no_los_binning(
-                                                                                                                                                stars_coords, 
-                                                                                                                                                stars_mass, 
-                                                                                                                                                pix_kpc, 
-                                                                                                                                                output_dimension, 
-                                                                                                                                                polar_angle_deg=polar_angle_deg, 
-                                                                                                                                                azimuth_angle_deg=azimuth_angle_deg, 
-                                                                                                                                                gas_coords=gas_coords, 
-                                                                                                                                                gas_masses=gas_mass,
-                                                                                                                                                star_vels=stars_vel,
-                                                                                                                                                gas_vels=gas_vel)
     
-    dimx, dimy = grid_info['num_pixels_x'], grid_info['num_pixels_y']
-    print ('Cutout size: %d x %d pix or %d x %d kpc' % (dimx,dimy,dim_kpc,dim_kpc))
+    # Grid info for high-res working grid
+    s_mem, _, _, g_inf, g_mem, _, s_v_los, g_v_los = get_2d_density_projection_no_los_binning(s_c, s_m, working_pix_kpc, 
+                                                                                              (dim_kpc, dim_kpc), 
+                                                                                              polar_angle_deg=polar_angle_deg, 
+                                                                                              azimuth_angle_deg=azimuth_angle_deg, 
+                                                                                              gas_coords=g_c, gas_masses=g_m, 
+                                                                                              star_vels=s_v, gas_vels=g_v)
+    dimx, dimy = g_inf['num_pixels_x'], g_inf['num_pixels_y']
+    #print ('Cutout size: %d x %d pix or %d x %d kpc' % (dimx,dimy,dim_kpc,dim_kpc))
 
     # --- Dust normalization loading ---
-    norm_dust_z = None
-    norm_dust_tau = None
     if isinstance(scale_dust_redshift, str):
-        if scale_dust_redshift == "Vogelsberger20":
-            data_file_name = "Vogelsberger20_scale_dust.txt"
-            try:
-                data_path = str(importlib.resources.files('galsyn.data').joinpath(data_file_name))
-                data = np.loadtxt(data_path)
-                norm_dust_z = data[:,0]
-                norm_dust_tau = data[:,1]
-            except Exception as e:
-                print(f"Error loading dust normalization data from {data_file_name}: {e}")
-                sys.exit(1)
-        else:
-            print(f"Error: Unknown string option for scale_dust_redshift: {scale_dust_redshift}")
-            sys.exit(1)
-    elif isinstance(scale_dust_redshift, dict):
-        norm_dust_z = np.asarray(scale_dust_redshift["z"])
-        norm_dust_tau = np.asarray(scale_dust_redshift["tau_dust"])
-    else:
-        print("Error: Invalid scale_dust_redshift type passed to generate_images.")
-        sys.exit(1)
-
-    # Calculate scale_dust_tau here in the main process
-    scale_dust_tau = tau_dust_given_z(snap_z, norm_dust_z, norm_dust_tau)
-    # --- End of dust normalization loading and calculation ---
-
-    nbands = len(filters)
+        data = np.loadtxt(str(importlib.resources.files('galsyn.data').joinpath("Vogelsberger20_scale_dust.txt")))
+        n_d_z, n_d_t = data[:,0], data[:,1]
+    else: n_d_z, n_d_t = np.asarray(scale_dust_redshift["z"]), np.asarray(scale_dust_redshift["tau_dust"])
+    s_d_t = tau_dust_given_z(snap_z, n_d_z, n_d_t)
 
     # --- Define the fixed observed-frame wavelength grid for output spectra ---
-    fixed_global_output_obs_wave = np.array([])
-    if output_pixel_spectra:
-        obs_min_boundary = rest_wave_min * (1.0 + snap_z)
-        obs_max_boundary = rest_wave_max * (1.0 + snap_z)
-        obs_delta_wave = rest_delta_wave * (1.0 + snap_z)
-        # Create a linear wavelength grid with 5 Angstrom increment
-        fixed_global_output_obs_wave = np.arange(obs_min_boundary, obs_max_boundary + obs_delta_wave, obs_delta_wave)
-        if fixed_global_output_obs_wave.size == 0:
-            print(f"Warning: Calculated output observed wavelength grid is empty for rest-frame range "
-                  f"[{rest_wave_min}-{rest_wave_max}] Angstroms at z={snap_z}. "
-                  f"Observed range: [{obs_min_boundary:.1f}-{obs_max_boundary:.1f}] Angstroms. "
-                  f"Output spectra will be empty for all pixels.")
+    f_g_o_w = np.arange(rest_wave_min*(1+z), (rest_wave_max+rest_delta_wave)*(1+z), rest_delta_wave*(1+z)) if output_pixel_spectra else np.array([])
+    num_w = f_g_o_w.size
 
-    num_obs_wave_points = fixed_global_output_obs_wave.size if output_pixel_spectra else 0
+    # Allocation for working grid maps
+    w_map_mw_age, w_map_stars_mw_zsol, w_map_stars_mass = np.zeros((dimy,dimx)), np.zeros((dimy,dimx)), np.zeros((dimy,dimx))
+    w_map_sfr_100, w_map_sfr_30, w_map_sfr_10 = np.zeros((dimy,dimx)), np.zeros((dimy,dimx)), np.zeros((dimy,dimx))
+    w_map_gas_mw_zsol, w_map_gas_mass, w_map_sfr_inst = np.zeros((dimy,dimx)), np.zeros((dimy,dimx)), np.zeros((dimy,dimx))
+    w_map_dust_mean_tauV, w_map_dust_mean_AV = np.zeros((dimy,dimx)), np.zeros((dimy,dimx))
+    w_map_flux, w_map_flux_dust = np.zeros((dimy,dimx,len(filters))), np.zeros((dimy,dimx,len(filters)))
+    w_map_spec_n, w_map_spec_d = (np.zeros((dimy, dimx, num_w)), np.zeros((dimy, dimx, num_w))) if output_pixel_spectra else (None, None)
+    w_map_lw = {k: np.full((dimy, dimx), np.nan) for k in ['age_n', 'age_d', 'z_n', 'z_d', 'v_n', 'v_d', 'v_neb', 'v_s_mw', 'v_g_mw', 'v_s_disp', 'v_g_disp']}
 
-    map_mw_age = np.zeros((dimy,dimx))
-    map_stars_mw_zsol = np.zeros((dimy,dimx))
-    map_stars_mass = np.zeros((dimy,dimx))
-    map_sfr_100 = np.zeros((dimy,dimx))
-    map_sfr_30 = np.zeros((dimy,dimx))
-    map_sfr_10 = np.zeros((dimy,dimx))
-    map_gas_mw_zsol = np.zeros((dimy,dimx))
-    map_gas_mass = np.zeros((dimy,dimx))
-    map_sfr_inst = np.zeros((dimy,dimx))
-    map_dust_mean_tauV = np.zeros((dimy,dimx))
-    map_dust_mean_AV = np.zeros((dimy,dimx))
-    map_flux = np.zeros((dimy,dimx,nbands))
-    map_flux_dust = np.zeros((dimy,dimx,nbands))
+    tasks = [(ii, jj, s_mem[ii][jj], g_mem[ii][jj]) for ii in range(dimy) for jj in range(dimx)]
+    tasks.sort(key=lambda x: len(x[2]) + len(x[3]), reverse=True)
+
+    with tqdm_joblib(total=len(tasks), desc="Processing pixels") as pb:
+        results = Parallel(n_jobs=n_jobs, initializer=init_worker, initargs=(ssp_code, snap_z, pix_area_kpc2_working, 
+                                                                             filters, filter_transmission_path, 
+                                                                             imf_type, imf_upper_limit, imf_lower_limit, 
+                                                                             imf1, imf2, imf3, vdmc, mdave, gas_logu, 
+                                                                             igm_type, dust_index_bc, dust_index, 
+                                                                             t_esc, dust_eta, s_d_t, cosmo_str, 
+                                                                             dust_law, bump_amp, relation_AVslope, 
+                                                                             salim_a0, salim_a1, salim_a2, salim_a3, 
+                                                                             salim_RV, salim_B, use_precomputed_ssp, 
+                                                                             s_m, s_age, s_z, s_im, s_v_los, s_c, g_m, 
+                                                                             g_sfr, g_z, g_lt, g_mh, g_v_los, g_c, 
+                                                                             ssp_filepath, ssp_interpolation_method, 
+                                                                             output_pixel_spectra, tuple(f_g_o_w) if f_g_o_w.size==0 else f_g_o_w))(delayed(_process_pixel_data)(*t) for t in tasks)
+
+    for ii, jj, pd in results:
+        w_map_stars_mass[ii,jj], w_map_mw_age[ii,jj], w_map_stars_mw_zsol[ii,jj] = pd['map_stars_mass'], pd['map_mw_age'], pd['map_stars_mw_zsol']
+        w_map_sfr_100[ii,jj], w_map_sfr_30[ii,jj], w_map_sfr_10[ii,jj] = pd['map_sfr_100'], pd['map_sfr_30'], pd['map_sfr_10']
+        w_map_gas_mass[ii,jj], w_map_sfr_inst[ii,jj], w_map_gas_mw_zsol[ii,jj] = pd['map_gas_mass'], pd['map_sfr_inst'], pd['map_gas_mw_zsol']
+        w_map_dust_mean_tauV[ii,jj], w_map_dust_mean_AV[ii,jj] = pd['map_dust_mean_tauV'], pd['map_dust_mean_AV']
+        w_map_flux[ii,jj], w_map_flux_dust[ii,jj] = pd['map_flux'], pd['map_flux_dust']
+        if output_pixel_spectra: w_map_spec_n[ii,jj], w_map_spec_d[ii,jj] = pd['obs_spectra_nodust_igm'], pd['obs_spectra_dust_igm']
+        w_map_lw['age_n'][ii,jj], w_map_lw['age_d'][ii,jj], w_map_lw['z_n'][ii,jj], w_map_lw['z_d'][ii,jj] = pd['map_lw_age_nodust'], pd['map_lw_age_dust'], pd['map_lw_zsol_nodust'], pd['map_lw_zsol_dust']
+        w_map_lw['v_s_mw'][ii,jj], w_map_lw['v_g_mw'][ii,jj], w_map_lw['v_s_disp'][ii,jj], w_map_lw['v_g_disp'][ii,jj] = pd['map_stars_mw_vel_los'], pd['map_gas_mw_vel_los'], pd['map_stars_vel_disp_los'], pd['map_gas_vel_disp_los']
+        w_map_lw['v_n'][ii,jj], w_map_lw['v_d'][ii,jj], w_map_lw['v_neb'][ii,jj] = pd['map_lw_vel_los_nodust'], pd['map_lw_vel_los_dust'], pd['map_lw_vel_los_nebular']
+
+
+
+    # --- FLUX CONSERVING REBINNING TO USER PIXEL SIZE ---
+    # The raw values in w_map_flux are in erg/s/cm2/A (linear flux density).
+    # To conserve flux, we sum the sub-pixels within each target pixel.
+    map_flux_summed = rebin_map(w_map_flux, rebin_factor, mode='sum')
+    map_flux_dust_summed = rebin_map(w_map_flux_dust, rebin_factor, mode='sum')
     
-    # Initialize spectra maps directly with the fixed size
-    map_spectra_nodust = np.zeros((dimy, dimx, num_obs_wave_points)) if output_pixel_spectra else None
-    map_spectra_dust = np.zeros((dimy, dimx, num_obs_wave_points)) if output_pixel_spectra else None
+    # Rebin properties using mean (physical quantities like age/metallicity)
+    map_stars_mass = rebin_map(w_map_stars_mass, rebin_factor, mode='sum')
+    map_mw_age = rebin_map(w_map_mw_age, rebin_factor, mode='mean')
+    map_stars_mw_zsol = rebin_map(w_map_stars_mw_zsol, rebin_factor, mode='mean')
+    map_sfr_100 = rebin_map(w_map_sfr_100, rebin_factor, mode='sum')
+    map_sfr_30 = rebin_map(w_map_sfr_30, rebin_factor, mode='sum')
+    map_sfr_10 = rebin_map(w_map_sfr_10, rebin_factor, mode='sum')
+    map_gas_mass = rebin_map(w_map_gas_mass, rebin_factor, mode='sum')
+    map_sfr_inst = rebin_map(w_map_sfr_inst, rebin_factor, mode='sum')
+    map_gas_mw_zsol = rebin_map(w_map_gas_mw_zsol, rebin_factor, mode='mean')
+    map_dust_mean_tauV = rebin_map(w_map_dust_mean_tauV, rebin_factor, mode='mean')
+    map_dust_mean_AV = rebin_map(w_map_dust_mean_AV, rebin_factor, mode='mean')
 
-    map_lw_age_nodust = np.full((dimy, dimx), np.nan, dtype=np.float32)
-    map_lw_age_dust = np.full((dimy, dimx), np.nan, dtype=np.float32)
-    map_lw_zsol_nodust = np.full((dimy, dimx), np.nan, dtype=np.float32)
-    map_lw_zsol_dust = np.full((dimy, dimx), np.nan, dtype=np.float32)
+    map_lw_final = {k: rebin_map(v, rebin_factor, mode='mean') for k, v in w_map_lw.items()}
+    
+    if output_pixel_spectra:
+        # Sum the spectra cubes to preserve total flux per pixel
+        map_spec_nodust = rebin_map(w_map_spec_n, rebin_factor, mode='sum')
+        map_spec_dust = rebin_map(w_map_spec_d, rebin_factor, mode='sum')
 
-    map_stars_mw_vel_los = np.full((dimy, dimx), np.nan, dtype=np.float32)
-    map_gas_mw_vel_los = np.full((dimy, dimx), np.nan, dtype=np.float32)
-    map_stars_vel_disp_los = np.full((dimy, dimx), np.nan, dtype=np.float32)
-    map_gas_vel_disp_los = np.full((dimy, dimx), np.nan, dtype=np.float32)
-    map_lw_vel_los_nodust = np.full((dimy, dimx), np.nan, dtype=np.float32)
-    map_lw_vel_los_dust = np.full((dimy, dimx), np.nan, dtype=np.float32)
-    map_lw_vel_los_nebular = np.full((dimy, dimx), np.nan, dtype=np.float32)
+    # --- FINAL UNIT CONVERSION ---
+    # Now convert the summed erg/s/cm2/A into the user's requested unit.
+    # We use the FINAL pix_arcsec to handle MJy/sr correctly.
+    map_flux = np.zeros((map_flux_summed.shape[0], map_flux_summed.shape[1], len(filters)))
+    map_flux_dust = np.zeros_like(map_flux)
 
-    tasks = []
-    for ii in range(dimy):
-        for jj in range(dimx):
-            num_stars_in_pixel = len(star_particle_membership[ii][jj])
-            num_gas_in_pixel = len(gas_particle_membership[ii][jj]) if gas_particle_membership is not None else 0
-            complexity = num_stars_in_pixel + num_gas_in_pixel
-            tasks.append({'coords': (ii, jj), 'complexity': complexity, 
-                          'star_part_mem': star_particle_membership[ii][jj],
-                          'gas_part_mem': gas_particle_membership[ii][jj] if gas_particle_membership is not None else []})
+    for i in range(len(filters)): 
+        map_flux[:,:,i] = convert_flux_map(map_flux_summed[:,:,i], f_w_p_g[filters[i]], to_unit=flux_unit, pixel_scale_arcsec=pix_arcsec)
+        map_flux_dust[:,:,i] = convert_flux_map(map_flux_dust_summed[:,:,i], f_w_p_g[filters[i]], to_unit=flux_unit, pixel_scale_arcsec=pix_arcsec)
 
-    tasks.sort(key=lambda x: x['complexity'], reverse=True)
-
-    # Prepare arguments for _process_pixel_data - ONLY task-specific data
-    processed_tasks_args = []
-    for task in tasks:
-        ii, jj = task['coords']
-        processed_tasks_args.append((ii, jj, task['star_part_mem'], task['gas_part_mem'])) # Removed large arrays
-
-    num_cores = n_jobs
-    if num_cores == -1:
-        num_cores = multiprocessing.cpu_count()
-
-    # Prepare output_obs_wave_grid for joblib (to prevent ValueError with np.array([]))
-    # If the array is empty, convert it to a tuple for safe comparison inside joblib.
-    if fixed_global_output_obs_wave.size == 0:
-        # Convert empty array to an empty tuple
-        safe_output_obs_wave = tuple(fixed_global_output_obs_wave)
-    else:
-        safe_output_obs_wave = fixed_global_output_obs_wave
-
-
-    print(f"\nStarting parallel pixel processing on {num_cores} cores...")
-
-    # Pass all large particle data arrays to init_worker
-    with tqdm_joblib(total=len(processed_tasks_args), desc="Processing pixels") as progress_bar:
-        results = Parallel(n_jobs=num_cores, verbose=0, initializer=init_worker,
-                           initargs=(ssp_code, snap_z, pix_area_kpc2,
-                                     filters, filter_transmission_path,
-                                     imf_type, imf_upper_limit, imf_lower_limit,
-                                     imf1, imf2, imf3, vdmc, mdave,
-                                     gas_logu, igm_type, dust_index_bc,
-                                     dust_index, t_esc, dust_eta, scale_dust_tau,
-                                     cosmo_str, dust_law, bump_amp, relation_AVslope, 
-                                     salim_a0, salim_a1, salim_a2, salim_a3, salim_RV, salim_B, use_precomputed_ssp, 
-                                     stars_mass, stars_age, stars_zmet, stars_init_mass, stars_vel_los_proj, stars_coords,
-                                     gas_mass, gas_sfr_inst, gas_zmet, gas_log_temp, gas_mass_H, gas_vel_los_proj, gas_coords,
-                                     ssp_filepath, ssp_interpolation_method, 
-                                     output_pixel_spectra, safe_output_obs_wave))( 
-            delayed(_process_pixel_data)(*task_args) for task_args in processed_tasks_args
-        )
-    #print("\nFinished parallel pixel processing.")
-
-    for k, pixel_result_tuple in enumerate(results):
-        ii, jj, pixel_data = pixel_result_tuple 
-        
-        original_ii, original_jj = ii, jj 
-        
-        map_stars_mass[original_ii][original_jj] = pixel_data['map_stars_mass']
-        map_mw_age[original_ii][original_jj] = pixel_data['map_mw_age']
-        map_stars_mw_zsol[original_ii][original_jj] = pixel_data['map_stars_mw_zsol']
-        map_sfr_100[original_ii][original_jj] = pixel_data['map_sfr_100']
-        map_sfr_30[original_ii][original_jj] = pixel_data['map_sfr_30']
-        map_sfr_10[original_ii][original_jj] = pixel_data['map_sfr_10']
-
-        map_gas_mass[original_ii][original_jj] = pixel_data['map_gas_mass']
-        map_sfr_inst[original_ii][original_jj] = pixel_data['map_sfr_inst']
-        map_gas_mw_zsol[original_ii][original_jj] = pixel_data['map_gas_mw_zsol']
-
-        map_dust_mean_tauV[original_ii][original_jj] = pixel_data['map_dust_mean_tauV']
-        map_dust_mean_AV[original_ii][original_jj] = pixel_data['map_dust_mean_AV']
-
-        map_flux[original_ii][original_jj] = pixel_data['map_flux']
-        map_flux_dust[original_ii][original_jj] = pixel_data['map_flux_dust']
-
-        if output_pixel_spectra:
-            # Directly assign as map_spectra_nodust is pre-allocated with correct size
-            map_spectra_nodust[original_ii][original_jj] = pixel_data['obs_spectra_nodust_igm']
-            map_spectra_dust[original_ii][original_jj] = pixel_data['obs_spectra_dust_igm']
-
-        # Populate light-weighted maps
-        map_lw_age_nodust[original_ii][original_jj] = pixel_data['map_lw_age_nodust']
-        map_lw_age_dust[original_ii][original_jj] = pixel_data['map_lw_age_dust']
-        map_lw_zsol_nodust[original_ii][original_jj] = pixel_data['map_lw_zsol_nodust']
-        map_lw_zsol_dust[original_ii][original_jj] = pixel_data['map_lw_zsol_dust']
-
-        # Populate velocity maps
-        map_stars_mw_vel_los[original_ii][original_jj] = pixel_data['map_stars_mw_vel_los']
-        map_gas_mw_vel_los[original_ii][original_jj] = pixel_data['map_gas_mw_vel_los']
-        map_stars_vel_disp_los[original_ii][original_jj] = pixel_data['map_stars_vel_disp_los']
-        map_gas_vel_disp_los[original_ii][original_jj] = pixel_data['map_gas_vel_disp_los']
-        map_lw_vel_los_nodust[original_ii][original_jj] = pixel_data['map_lw_vel_los_nodust']
-        map_lw_vel_los_dust[original_ii][original_jj] = pixel_data['map_lw_vel_los_dust']
-        map_lw_vel_los_nebular[original_ii][original_jj] = pixel_data['map_lw_vel_los_nebular']
-
-    #print("All calculations complete. Maps populated.")
-
-    for i_band in range(len(filters)): 
-        map_flux[:,:,i_band] = convert_flux_map(map_flux[:,:,i_band], filter_wave_pivot_data_global[filters[i_band]], to_unit=flux_unit, pixel_scale_arcsec=pix_arcsec)
-        map_flux_dust[:,:,i_band] = convert_flux_map(map_flux_dust[:,:,i_band], filter_wave_pivot_data_global[filters[i_band]], to_unit=flux_unit, pixel_scale_arcsec=pix_arcsec)
-
+    # --- SAVE TO FITS ---
     if name_out_img is not None:
         try:
             hdul = fits.HDUList()
+            final_dimy, final_dimx = map_flux.shape[0], map_flux.shape[1]
 
+            # 1. Primary HDU & Multi-band Photometry
             if map_flux.shape[2] > 0:
                 primary_data = map_flux[:, :, 0]
                 prihdr = fits.Header()
                 prihdr['COMMENT'] = 'Primary Image: First band (no dust)'
-                prihdr['CRPIX1'] = dimx / 2.0 + 0.5
-                prihdr['CRPIX2'] = dimy / 2.0 + 0.5
+                # WCS based on rebinned (final) dimensions
+                prihdr['CRPIX1'] = final_dimx / 2.0 + 0.5
+                prihdr['CRPIX2'] = final_dimy / 2.0 + 0.5
                 prihdr['CDELT1'] = pix_kpc
                 prihdr['CDELT2'] = pix_kpc
                 prihdr['CUNIT1'] = 'kpc'
                 prihdr['CUNIT2'] = 'kpc'
+                # Simulation Metadata
                 prihdr['REDSHIFT'] = snap_z
                 prihdr['POLAR'] = polar_angle_deg
                 prihdr['AZIMUTH'] = azimuth_angle_deg
@@ -1111,28 +716,33 @@ def generate_images(sim_file, z, filters, filter_transmission_path, dim_kpc=None
                 prihdr['PIXSIZE'] = pix_arcsec
                 prihdr['BUNIT'] = flux_unit
                 prihdr['SSP_CODE'] = ssp_code
+                prihdr['SM_LEN'] = smoothing_length
 
                 primary_hdu = fits.PrimaryHDU(data=primary_data, header=prihdr)
                 hdul.append(primary_hdu)
 
+                # Add Photometry Extensions (No Dust)
                 for i_band in range(len(filters)):
                     ext_hdr = fits.Header()
                     ext_hdr['EXTNAME'] = 'NODUST_'+filters[i_band].upper() 
                     ext_hdr['FILTER'] = filters[i_band] 
                     ext_hdr['COMMENT'] = f'Flux for filter: {filters[i_band]}' 
-                    ext_hdu = fits.ImageHDU(data=map_flux[:, :, i_band], header=ext_hdr)
-                    hdul.append(ext_hdu)
+                    ext_hdr['BUNIT'] = flux_unit
+                    hdul.append(fits.ImageHDU(data=map_flux[:, :, i_band], header=ext_hdr))
 
+                # Add Photometry Extensions (With Dust)
                 for i_band in range(len(filters)):
                     ext_hdr = fits.Header()
                     ext_hdr['EXTNAME'] = 'DUST_'+filters[i_band].upper() 
                     ext_hdr['FILTER'] = filters[i_band] 
                     ext_hdr['COMMENT'] = f'Flux (with dust) for filter: {filters[i_band]}' 
-                    ext_hdu = fits.ImageHDU(data=map_flux_dust[:, :, i_band], header=ext_hdr)
-                    hdul.append(ext_hdu)
+                    ext_hdr['BUNIT'] = flux_unit
+                    hdul.append(fits.ImageHDU(data=map_flux_dust[:, :, i_band], header=ext_hdr))
             else:
                 hdul.append(fits.PrimaryHDU())
 
+            # 2. Property Maps (Mass, Age, Z, Velocity)
+            # Map the rebinned data to their original naming convention
             map_data_to_save = {
                 'STARS_MASS': map_stars_mass,
                 'MW_AGE': map_mw_age,
@@ -1145,17 +755,17 @@ def generate_images(sim_file, z, filters, filter_transmission_path, dim_kpc=None
                 'GAS_MW_ZSOL': map_gas_mw_zsol,
                 'DUST_MEAN_TAUV': map_dust_mean_tauV,
                 'DUST_MEAN_AV': map_dust_mean_AV,
-                'LW_AGE_NODUST': map_lw_age_nodust,
-                'LW_AGE_DUST': map_lw_age_dust,
-                'LW_ZSOL_NODUST': map_lw_zsol_nodust,
-                'LW_ZSOL_DUST': map_lw_zsol_dust,
-                'STARS_MW_VEL_LOS': map_stars_mw_vel_los,
-                'GAS_MW_VEL_LOS': map_gas_mw_vel_los,
-                'STARS_VEL_DISP_LOS': map_stars_vel_disp_los,
-                'GAS_VEL_DISP_LOS': map_gas_vel_disp_los,
-                'LW_VEL_LOS_NODUST': map_lw_vel_los_nodust,
-                'LW_VEL_LOS_DUST': map_lw_vel_los_dust,
-                'LW_VEL_LOS_NEBULAR': map_lw_vel_los_nebular
+                'LW_AGE_NODUST': map_lw_final['age_n'],
+                'LW_AGE_DUST': map_lw_final['age_d'],
+                'LW_ZSOL_NODUST': map_lw_final['z_n'],
+                'LW_ZSOL_DUST': map_lw_final['z_d'],
+                'STARS_MW_VEL_LOS': map_lw_final['v_s_mw'],
+                'GAS_MW_VEL_LOS': map_lw_final['v_g_mw'],
+                'STARS_VEL_DISP_LOS': map_lw_final['v_s_disp'],
+                'GAS_VEL_DISP_LOS': map_lw_final['v_g_disp'],
+                'LW_VEL_LOS_NODUST': map_lw_final['v_n'],
+                'LW_VEL_LOS_DUST': map_lw_final['v_d'],
+                'LW_VEL_LOS_NEBULAR': map_lw_final['v_neb']
             }
 
             for map_name, data_array in map_data_to_save.items():
@@ -1163,73 +773,55 @@ def generate_images(sim_file, z, filters, filter_transmission_path, dim_kpc=None
                     ext_hdr = fits.Header()
                     ext_hdr['EXTNAME'] = map_name
                     ext_hdr['COMMENT'] = f'Map of {map_name.replace("_", " ").title()}'
-                    if 'AGE' in map_name:
+                    # Unit tagging
+                    if 'AGE' in map_name: 
                         ext_hdr['BUNIT'] = 'Gyr'
-                    elif 'ZSOL' in map_name:
+                    elif 'ZSOL' in map_name: 
                         ext_hdr['BUNIT'] = 'Z/Zsun'
-                    elif 'VEL' in map_name:
+                    elif 'VEL' in map_name: 
                         ext_hdr['BUNIT'] = 'km/s'
+                    elif 'MASS' in map_name: 
+                        ext_hdr['BUNIT'] = 'Msun'
+                    elif 'SFR' in map_name: 
+                        ext_hdr['BUNIT'] = 'Msun/yr'
+                    
                     hdul.append(fits.ImageHDU(data=data_array, header=ext_hdr))
 
+            # 3. Spectral Cubes
             if output_pixel_spectra:
-                # Transpose the data cube from (dim_y, dim_x, wavelength) to (wavelength, dim_y, dim_x)
-                transposed_map_spectra_nodust = map_spectra_nodust.transpose((2, 0, 1))
-                transposed_map_spectra_dust = map_spectra_dust.transpose((2, 0, 1))
+                # Transpose the rebinned data cube from (y, x, wave) to (wave, y, x)
+                trans_nodust = map_spec_nodust.transpose((2, 0, 1))
+                trans_dust = map_spec_dust.transpose((2, 0, 1))
 
-                ext_hdr_nodust_spec = fits.Header()
-                ext_hdr_nodust_spec['EXTNAME'] = 'OBS_SPEC_NODUST' 
-                ext_hdr_nodust_spec['COMMENT'] = 'Observed-frame spectra (no dust attenuation)' 
+                for ext_name, data_cube in [('OBS_SPEC_NODUST', trans_nodust), 
+                                            ('OBS_SPEC_DUST', trans_dust)]:
+                    h = fits.Header()
+                    h['EXTNAME'] = ext_name
+                    h['COMMENT'] = 'Observed-frame spectra'
+                    
+                    # Spectral Axis
+                    h['CRPIX1'] = 1.0
+                    h['CRVAL1'] = f_g_o_w[0] if f_g_o_w.size > 0 else 0.0
+                    h['CDELT1'] = (f_g_o_w[1] - f_g_o_w[0]) if f_g_o_w.size > 1 else 0.0
+                    h['CUNIT1'] = 'Angstrom'
+                    
+                    # Spatial Axes (rebinned)
+                    h['CRPIX2'] = final_dimy / 2.0 + 0.5
+                    h['CDELT2'] = pix_kpc
+                    h['CUNIT2'] = 'kpc'
+                    h['CRPIX3'] = final_dimx / 2.0 + 0.5
+                    h['CDELT3'] = pix_kpc
+                    h['CUNIT3'] = 'kpc'
+                    
+                    h['BUNIT'] = 'erg/s/cm2/Angstrom'
+                    hdul.append(fits.ImageHDU(data=data_cube, header=h))
                 
-                # Update CRPIX, CDELT, CUNIT to reflect new axis order
-                ext_hdr_nodust_spec['CRPIX1'] = 1.0 # Wavelength axis becomes the first axis
-                ext_hdr_nodust_spec['CRVAL1'] = fixed_global_output_obs_wave[0] if fixed_global_output_obs_wave.size > 0 else 0.0
-                ext_hdr_nodust_spec['CDELT1'] = (fixed_global_output_obs_wave[1] - fixed_global_output_obs_wave[0]) if fixed_global_output_obs_wave.size > 1 else 0.0
-                ext_hdr_nodust_spec['CUNIT1'] = 'Angstrom'
+                # Wavelength Binary Table
+                if f_g_o_w.size > 0:
+                    col = fits.Column(name='WAVELENGTH', format='D', array=f_g_o_w)
+                    hdul.append(fits.BinTableHDU.from_columns([col], name='WAVELENGTH_GRID'))
 
-                ext_hdr_nodust_spec['CRPIX2'] = dimy / 2.0 + 0.5 # dim_y becomes the second axis
-                ext_hdr_nodust_spec['CDELT2'] = pix_kpc
-                ext_hdr_nodust_spec['CUNIT2'] = 'kpc'
-
-                ext_hdr_nodust_spec['CRPIX3'] = dimx / 2.0 + 0.5 # dim_x becomes the third axis
-                ext_hdr_nodust_spec['CDELT3'] = pix_kpc
-                ext_hdr_nodust_spec['CUNIT3'] = 'kpc'
-                
-                ext_hdr_nodust_spec['BUNIT'] = 'erg/s/cm2/Angstrom' 
-                hdul.append(fits.ImageHDU(data=transposed_map_spectra_nodust, header=ext_hdr_nodust_spec))
-
-                ext_hdr_dust_spec = fits.Header()
-                ext_hdr_dust_spec['EXTNAME'] = 'OBS_SPEC_DUST' 
-                ext_hdr_dust_spec['COMMENT'] = 'Observed-frame spectra (with dust attenuation)' 
-                
-                # Update CRPIX, CDELT, CUNIT to reflect new axis order
-                ext_hdr_dust_spec['CRPIX1'] = 1.0 # Wavelength axis becomes the first axis
-                ext_hdr_dust_spec['CRVAL1'] = fixed_global_output_obs_wave[0] if fixed_global_output_obs_wave.size > 0 else 0.0
-                ext_hdr_dust_spec['CDELT1'] = (fixed_global_output_obs_wave[1] - fixed_global_output_obs_wave[0]) if fixed_global_output_obs_wave.size > 1 else 0.0
-                ext_hdr_dust_spec['CUNIT1'] = 'Angstrom'
-
-                ext_hdr_dust_spec['CRPIX2'] = dimy / 2.0 + 0.5 # dim_y becomes the second axis
-                ext_hdr_dust_spec['CDELT2'] = pix_kpc
-                ext_hdr_dust_spec['CUNIT2'] = 'kpc'
-
-                ext_hdr_dust_spec['CRPIX3'] = dimx / 2.0 + 0.5 # dim_x becomes the third axis
-                ext_hdr_dust_spec['CDELT3'] = pix_kpc
-                ext_hdr_dust_spec['CUNIT3'] = 'kpc'
-
-                ext_hdr_dust_spec['BUNIT'] = 'erg/s/cm2/Angstrom'
-                hdul.append(fits.ImageHDU(data=transposed_map_spectra_dust, header=ext_hdr_dust_spec))
-                
-                # --- Add wavelength array as a binary table extension ---
-                if fixed_global_output_obs_wave.size > 0:
-                    col = fits.Column(name='WAVELENGTH', format='D', array=fixed_global_output_obs_wave)
-                    cols = fits.ColDefs([col])
-                    wavelength_hdu = fits.BinTableHDU.from_columns(cols, name='WAVELENGTH_GRID')
-                    wavelength_hdu.header['BUNIT'] = 'Angstrom'
-                    wavelength_hdu.header['COMMENT'] = 'Wavelength grid for OBS_SPEC_NODUST and OBS_SPEC_DUST'
-                    hdul.append(wavelength_hdu)
-                else:
-                    print("Warning: No wavelength grid data to save for WAVELENGTH_GRID extension.")
-
-
+            # Write to file
             output_dir = os.path.dirname(name_out_img)
             if output_dir and not os.path.exists(output_dir):
                 os.makedirs(output_dir)
