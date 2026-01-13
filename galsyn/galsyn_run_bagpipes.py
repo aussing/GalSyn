@@ -121,28 +121,6 @@ def rebin_map(data, factor, mode='sum'):
 
     return rescaled
 
-def rebin_map_old(data, factor, mode='sum'):
-    """
-    Rebins a 2D or 3D array by an integer factor.
-    'sum' is used for flux-based maps to preserve total energy.
-    'mean' is used for property maps (age, metallicity).
-    """
-    if factor == 1 or data is None:
-        return data
-    
-    if data.ndim == 3:
-        y, x, z = data.shape
-        new_y, new_x = y // factor, x // factor
-        reshaped = data[:new_y*factor, :new_x*factor, :].reshape(new_y, factor, new_x, factor, z)
-        result = reshaped.sum(axis=(1, 3))
-        return result if mode == 'sum' else result / (factor**2)
-    
-    y, x = data.shape
-    new_y, new_x = y // factor, x // factor
-    reshaped = data[:new_y*factor, :new_x*factor].reshape(new_y, factor, new_x, factor)
-    result = reshaped.sum(axis=(1, 3))
-    return result if mode == 'sum' else result / (factor**2)
-
 
 def _load_filter_transmission_from_paths(filters_list, filter_transmission_path_dict):
     filter_transmission_data = {}
@@ -475,20 +453,25 @@ def generate_images(sim_file, z, filters, filter_transmission_path, smoothing_le
         rest_delta_wave (float, optional): Wavelength step in rest-frame for output
                                            spectra (Angstroms). Defaults to 5.0.
     """
-    
+
     cosmo = define_cosmo(cosmo_str)
     print ('Processing '+sim_file)
     f_t_g, f_w_p_g = _load_filter_transmission_from_paths(filters, filter_transmission_path)
-    snap_z, snap_univ_age = z, cosmo.age(z).value
+    snap_z, snap_a, snap_univ_age = z, 1.0/(1.0 + z), cosmo.age(z).value
 
-    if pix_kpc is None: pix_kpc = angular_to_physical(snap_z, pix_arcsec, cosmo)
-    else: pix_arcsec = physical_to_angular(snap_z, pix_kpc, cosmo)
+    if pix_arcsec is not None:
+        pix_kpc = angular_to_physical(snap_z, pix_arcsec, cosmo)
+    else:
+        if pix_kpc is None: 
+            print ('Both pix_arcsec and pix_kpc cannot be None!')
+            sys.exit()
+        else:
+            pix_arcsec = physical_to_angular(snap_z, pix_kpc, cosmo)  
 
-    # Initial Gridding based on smoothing length
-    rebin_factor = int(np.ceil(pix_kpc / smoothing_length))
-    working_pix_kpc = pix_kpc / rebin_factor
+    # Initial gridding based on smoothing length
+    working_pix_kpc = smoothing_length
     pix_area_kpc2_working = working_pix_kpc**2
-    print(f'Working grid size: {working_pix_kpc:.4f} kpc (Rebin Factor: {rebin_factor})')
+    rebin_factor = pix_kpc / smoothing_length
 
     with h5py.File(sim_file,'r') as f:
         s_m, s_fz, s_z, s_c, s_v = f['star/mass'][:], f['star/form_z'][:], f['star/zmet'][:], f['star/coords'][:], f['star/vel'][:]

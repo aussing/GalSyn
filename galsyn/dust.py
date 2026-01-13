@@ -3,7 +3,7 @@ import numpy as np
 from galsyn import config
 import importlib.resources 
 
-wave_V = 0.5500
+wave_V = 0.5500      # in micron
 
 def tau_dust_given_z(z, norm_dust_z, norm_dust_tau):
     """
@@ -74,7 +74,8 @@ def unresolved_dust_birth_cloud_Alambda_per_AV(wave_ang, dust_index_bc=-0.7):
     Returns:
         np.ndarray: The normalized attenuation curve A(lambda)/A(V).
     """
-    Alambda_per_AV = np.power(wave_ang/wave_V, dust_index_bc)
+    wave_V_ang = wave_V * 1e+4
+    Alambda_per_AV = np.power(wave_ang/wave_V_ang, dust_index_bc)
     return Alambda_per_AV
 
 def calzetti_dust_klambda(wave_ang):

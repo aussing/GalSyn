@@ -135,32 +135,6 @@ class GalSynMockObservation_imaging:
                 
             return resampled
 
-    def _rebin_map_flux_old(self, data, initial_scale, final_scale):
-        """
-        Rebins a 2D array by an integer or fractional factor while conserving flux.
-        Similar logic to rebin_map in galsyn_run_fsps.py.
-        """
-        if np.isclose(initial_scale, final_scale):
-            return data
-        
-        factor = final_scale / initial_scale
-        
-        # If integer factor, use optimized reshaping
-        if np.isclose(factor % 1, 0):
-            f = int(np.round(factor))
-            y, x = data.shape
-            new_y, new_x = y // f, x // f
-            reshaped = data[:new_y*f, :new_x*f].reshape(new_y, f, new_x, f)
-            return reshaped.sum(axis=(1, 3))
-        else:
-            # Fractional rebinning using area summation
-            from scipy.ndimage import zoom
-            resampled = zoom(data, 1/factor, order=0) # Nearest neighbor for binning logic
-            # Scale to conserve total energy (flux)
-            if resampled.sum() != 0:
-                resampled *= (data.sum() / resampled.sum())
-            return resampled
-
     def _get_flux_data(self, filter_name, dust_attenuation=True):
         """
         Retrieves flux data for a given filter from the FITS file.

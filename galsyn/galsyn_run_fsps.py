@@ -142,69 +142,6 @@ def rebin_map(data, factor, mode='sum'):
 
     return rescaled
 
-
-def rebin_map_old1(data, factor, mode='sum'):
-    """
-    Rebins a 2D or 3D array by any float factor.
-    
-    If mode='sum', total flux is preserved (Extensive property).
-    If mode='mean', average values are preserved (Intensive property).
-    """
-    if factor == 1.0:
-        return data
-
-    zoom_rate = 1.0 / factor
-    if data.ndim == 3:
-        zoom_factors = (zoom_rate, zoom_rate, 1)
-    else:
-        zoom_factors = (zoom_rate, zoom_rate)
-
-    rescaled = zoom(data, zoom_factors, order=1, prefilter=False)
-
-    if mode == 'sum':
-        rescaled = rescaled * (factor**2)
-
-        # enforce exact flux conservation
-        if data.ndim == 3:
-            # compute sums per spectral slice (axis 0,1 are spatial)
-            sum_in = np.nansum(data, axis=(0, 1))
-            sum_out = np.nansum(rescaled, axis=(0, 1))
-            # avoid division by zero
-            nonzero = sum_out != 0
-            rescaled[..., nonzero] *= (sum_in[nonzero] / sum_out[nonzero])
-        else:
-            sum_in = np.nansum(data)
-            sum_out = np.nansum(rescaled)
-            if sum_out != 0:
-                rescaled *= (sum_in / sum_out)
-
-        return rescaled
-    else:
-        return rescaled
-
-def rebin_map_old(data, factor, mode='sum'):
-    """
-    Rebins a 2D or 3D array by an integer factor.
-    'sum' is used for flux-based maps to preserve total energy.
-    'mean' is used for property maps (age, metallicity).
-    """
-    if factor == 1:
-        return data
-    
-    if data.ndim == 3:
-        y, x, z = data.shape
-        # Ensure dimensions are divisible by factor
-        new_y, new_x = y // factor, x // factor
-        reshaped = data[:new_y*factor, :new_x*factor, :].reshape(new_y, factor, new_x, factor, z)
-        result = reshaped.sum(axis=(1, 3))
-        return result if mode == 'sum' else result / (factor**2)
-    
-    y, x = data.shape
-    new_y, new_x = y // factor, x // factor
-    reshaped = data[:new_y*factor, :new_x*factor].reshape(new_y, factor, new_x, factor)
-    result = reshaped.sum(axis=(1, 3))
-    return result if mode == 'sum' else result / (factor**2)
-
 def _load_filter_transmission_from_paths(filters_list, filter_transmission_path_dict):
     filter_transmission_data = {}
     filter_wave_pivot_data = {}
@@ -574,11 +511,6 @@ def generate_images(sim_file, z, filters, filter_transmission_path, smoothing_le
     working_pix_kpc = smoothing_length
     pix_area_kpc2_working = working_pix_kpc**2
     rebin_factor = pix_kpc / smoothing_length
-
-    #rebin_factor = int(np.ceil(pix_kpc / smoothing_length))
-    #working_pix_kpc = pix_kpc / rebin_factor
-    #pix_area_kpc2_working = working_pix_kpc**2
-    #print(f'Working grid size: {working_pix_kpc:.4f} kpc (Rebin Factor: {rebin_factor})')
 
     with h5py.File(sim_file,'r') as f:
         s_im, s_fz, s_m, s_z, s_c, s_v = f['star/init_mass'][:], f['star/form_z'][:], f['star/mass'][:], f['star/zmet'][:], f['star/coords'][:], f['star/vel'][:]
