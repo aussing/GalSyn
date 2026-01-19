@@ -4,7 +4,7 @@ Installation
 
 Installing stable version
 -------------------------
-GalSyn is available as a package on PyPI and you can install by executing the following command:
+GalSyn is available as a package on PyPI and can be installed by executing the following command:
 
 .. code-block:: bash
     

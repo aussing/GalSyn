@@ -1,5 +1,8 @@
-Generating Synthetic Spectrophotometric Data Cubes
-==================================================
+Generating Synthetic Data Cubes
+=================================
+
+Generating imaging data cubes
+------------------------------
 
 With all the preparatory steps completed, we can now initialize the ``GalaxySynthesizer`` class and run the synthesis process. 
 We will generate synthetic imaging and IFU data cubes using the following script:
@@ -24,9 +27,14 @@ We will generate synthetic imaging and IFU data cubes using the following script
     gs.dust_index_bc = -0.7
 
     gs.ncpu = 5                     # number of CPU cores to be used for the calculations
-    gs.output_pixel_spectra = True  # output spatially resolved spectra
+    gs.output_pixel_spectra = False  # output spatially resolved spectra
 
     # output file name
     gs.name_out_img = 'galsyn_'+str(snap_number)+'_'+str(subhalo_id)+'.fits'
 
     gs.run_synthesis()
+
+
+Generating imaging + spectroscopy data cubes
+---------------------------------------------
+
