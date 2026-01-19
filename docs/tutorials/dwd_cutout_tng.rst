@@ -21,7 +21,7 @@ To download a subhalo cutout of a specific galaxy (given snapshot number and sub
     from galsyn.simutils_tng import download_cutout_subhalo_hdf5
 
     # Your personal API key from the IllustrisTNG website
-    api_key = "7ae4d3ea8a7c808a0932e62abc69dde4"
+    api_key = "your_api_key"
 
     # Specify simulation parameters
     sim = 'TNG50-1'         # The TNG simulation run
