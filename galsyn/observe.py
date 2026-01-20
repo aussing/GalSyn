@@ -281,6 +281,8 @@ class GalSynMockObservation_ifu:
     including wavelength cutting and regridding, spatial resampling, spectral smoothing, spatial PSF convolution,
     noise injection, and RMS data cube generation.
 
+    Note: IFU input and output are strictly in erg/s/cm^2/Angstrom.
+
     Parameters:
     -----------
     fits_file_path : str
@@ -312,6 +314,7 @@ class GalSynMockObservation_ifu:
     def __init__(self, fits_file_path, desired_wave_grid, psf_cube_path, psf_pixel_scale,
                  spectral_resolution_R, mag_zp, limiting_magnitude_wave_func, snr_limit,
                  final_pixel_scale_arcsec, exposure_time):
+        
         """
         Initializes the GalSynMockObservation_ifu with input parameters.
 
@@ -341,19 +344,24 @@ class GalSynMockObservation_ifu:
         exposure_time : float or callable
             Exposure time in seconds. Can be a constant float or a function of wavelength.
         """
-
+        
         self.hdul = fits.open(fits_file_path)
         self.image_header = self.hdul[0].header
         self.initial_pixel_scale_arcsec = self.image_header['PIXSIZE']
-        self.original_flux_unit = self.image_header.get('BUNIT', 'erg/s/cm2/A')
+        
+        # Synthetic IFU data is consistently erg/s/cm^2/A
+        self.original_flux_unit = 'erg/s/cm2/A'
         self.original_wave_grid = self.hdul['WAVELENGTH_GRID'].data['WAVELENGTH']
         
         self.desired_wave_grid = desired_wave_grid
         self.psf_cube_path = psf_cube_path
         self.psf_pixel_scale = psf_pixel_scale
         self.spectral_resolution_R = spectral_resolution_R
-        self.mag_zp, self.limiting_magnitude_wave_func, self.snr_limit = mag_zp, limiting_magnitude_wave_func, snr_limit
-        self.final_pixel_scale_arcsec, self.exposure_time = final_pixel_scale_arcsec, exposure_time
+        self.mag_zp = mag_zp
+        self.limiting_magnitude_wave_func = limiting_magnitude_wave_func
+        self.snr_limit = snr_limit
+        self.final_pixel_scale_arcsec = final_pixel_scale_arcsec
+        self.exposure_time = exposure_time
 
         self.initial_datacube_nodust = self.hdul['OBS_SPEC_NODUST'].data if 'OBS_SPEC_NODUST' in self.hdul else None
         self.initial_datacube_dust = self.hdul['OBS_SPEC_DUST'].data if 'OBS_SPEC_DUST' in self.hdul else None
@@ -365,101 +373,57 @@ class GalSynMockObservation_ifu:
     def _get_wave_dependent_param(self, param, wavelength):
         return param(wavelength) if callable(param) else param
 
-    def _get_flux_data_ifufunc(self, input_datacube):
+    def _rebin_map_flux(self, data, initial_scale, final_scale):
         """
-        Retrieves flux data from the IFU FITS file and converts it to
-        erg/s/cm^2/A for internal calculations.
-
-        Parameters:
-        -----------
-        input_datacube : np.ndarray
-            The input data cube to process.
-        dust_attenuation : bool
-            Indicates whether to process the dust-attenuated or non-attenuated cube.
-
-        Returns:
-        --------
-        np.ndarray
-            The data cube in units of erg/s/cm^2/A.
+        Improved spatial resampling using bicubic interpolation and 
+        exact flux conservation, updated to resolve UserWarning.
         """
-        if self.original_flux_unit == 'erg/s/cm2/A': 
-            return input_datacube
+        if np.isclose(initial_scale, final_scale):
+            return data
         
-        elif self.original_flux_unit == 'MJy/sr':
-            c_angstrom_s = 2.99792458e18
-            # Calculate pixel area in steradians using the initial pixel scale
-            pixel_area_sr = (self.initial_pixel_scale_arcsec * np.pi / (180.0 * 3600.0))**2
-            output_cube = np.zeros_like(input_datacube)
-            
-            for i, wave_eff in enumerate(self.original_wave_grid):
-                # 1. Convert MJy/sr to Jy/pixel: (data * 1e6) * pixel_area_sr
-                # 2. Convert Jy to erg/s/cm^2/Hz: Jy * 1e-23
-                # 3. Convert f_nu to f_lambda: (f_nu * c) / lambda^2
-                f_nu_per_pixel = input_datacube[i] * 1e6 * pixel_area_sr
-                f_nu_erg_s_cm2_Hz = f_nu_per_pixel * 1e-23
-                output_cube[i] = f_nu_erg_s_cm2_Hz * c_angstrom_s / wave_eff**2
-            return output_cube
-        else: 
-            raise ValueError(f"Unsupported unit: {self.original_flux_unit}")
+        factor = final_scale / initial_scale
+        from scipy.ndimage import zoom
+        
+        # Updated with mode='grid-constant' to match grid_mode=True
+        resampled = zoom(data, 1/factor, order=3, prefilter=True, 
+                        grid_mode=True, mode='grid-constant')
+        
+        # Flux scaling based on pixel area change
+        resampled *= (factor**2)
+        
+        # Final safety check for absolute conservation
+        sum_in = np.nansum(data)
+        sum_out = np.nansum(resampled)
+        if sum_out != 0 and not np.isnan(sum_out):
+            resampled *= (sum_in / sum_out)
+                
+        return resampled
 
     def process_datacube(self, dust_attenuation=None, apply_noise_to_cube=True):
         print("\nStarting IFU Pipeline: Resample -> Smoothing -> PSF -> Noise")
         process_types = [True, False] if dust_attenuation is None else [dust_attenuation]
         
         for current_dust_attenuation in process_types:
-            input_cube_raw = self.initial_datacube_dust if current_dust_attenuation else self.initial_datacube_nodust
-            if input_cube_raw is None: 
-                continue
+            cube_erg = self.initial_datacube_dust if current_dust_attenuation else self.initial_datacube_nodust
+            if cube_erg is None: continue
             
             print(f"Processing IFU data for dust_attenuation={current_dust_attenuation}")
 
-            # 1. Internal Conversion & Spectral Grid Alignment
-            print("  Cutting/interpolating data cube to desired wavelength grid...")
-            cube_erg = self._get_flux_data_ifufunc(input_cube_raw)
+            # 1. Spectral Grid Alignment
             reshaped = cube_erg.reshape(cube_erg.shape[0], -1).T
             interp_cube_flat = np.zeros((reshaped.shape[0], len(self.desired_wave_grid)))
             for i in range(reshaped.shape[0]):
-                interp_cube_flat[i] = interp1d(self.original_wave_grid, reshaped[i], bounds_error=False, fill_value=0.0)(self.desired_wave_grid)
+                interp_cube_flat[i] = interp1d(self.original_wave_grid, reshaped[i], 
+                                              bounds_error=False, fill_value=0.0)(self.desired_wave_grid)
             cube_wave_cut = interp_cube_flat.T.reshape(len(self.desired_wave_grid), cube_erg.shape[1], cube_erg.shape[2])
-            print(f"  Data cube cut to wavelength grid. New shape: {cube_wave_cut.shape}")
 
-            # 2. Spatial Resampling (Flux Conserving)
-            #print(f"  Resampling data cube spatially to {self.final_pixel_scale_arcsec:.4f} arcsec...")
-            #factor = self.final_pixel_scale_arcsec / self.initial_pixel_scale_arcsec
-            #new_ny, new_nx = int(np.round(cube_wave_cut.shape[1] / factor)), int(np.round(cube_wave_cut.shape[2] / factor))
-            #resampled_cube = np.zeros((len(self.desired_wave_grid), new_ny, new_nx))
-            #from scipy.ndimage import zoom
-            #for i in range(len(self.desired_wave_grid)):
-            #    resampled_cube[i] = zoom(cube_wave_cut[i], 1/factor, order=0)
-            #    if resampled_cube[i].sum() != 0: resampled_cube[i] *= (cube_wave_cut[i].sum() / resampled_cube[i].sum())
-
-            # 2. Spatial Resampling (Flux Conserving)
-            print(f"  Resampling data cube spatially to {self.final_pixel_scale_arcsec:.4f} arcsec...")
-            factor = self.final_pixel_scale_arcsec / self.initial_pixel_scale_arcsec
-            
-            from scipy.ndimage import zoom
-            # First, calculate a single zoom to get the output shape
-            sample_slice = zoom(cube_wave_cut[0], 1/factor, order=1, prefilter=False)
-            new_ny, new_nx = sample_slice.shape
-            
-            resampled_cube = np.zeros((len(self.desired_wave_grid), new_ny, new_nx))
+            # 2. Improved Spatial Resampling
+            print(f"  Resampling spatially to {self.final_pixel_scale_arcsec:.4f} arcsec (Bicubic)...")
+            sample_slice = self._rebin_map_flux(cube_wave_cut[0], self.initial_pixel_scale_arcsec, self.final_pixel_scale_arcsec)
+            resampled_cube = np.zeros((len(self.desired_wave_grid), sample_slice.shape[0], sample_slice.shape[1]))
             
             for i in range(len(self.desired_wave_grid)):
-                # Resample current slice
-                resampled_slice = zoom(cube_wave_cut[i], 1/factor, order=1, prefilter=False)
-                
-                # Area scaling
-                resampled_slice *= (factor**2)
-                
-                # Empirical normalization per spectral slice
-                sum_in = np.nansum(cube_wave_cut[i])
-                sum_out = np.nansum(resampled_slice)
-                
-                if sum_out != 0 and not np.isnan(sum_out):
-                    resampled_slice *= (sum_in / sum_out)
-                
-                resampled_cube[i] = resampled_slice
-                
+                resampled_cube[i] = self._rebin_map_flux(cube_wave_cut[i], self.initial_pixel_scale_arcsec, self.final_pixel_scale_arcsec)
 
             # 3. Spectral Smoothing
             print(f"  Smoothing spectra to R={self.spectral_resolution_R}...")
@@ -489,68 +453,50 @@ class GalSynMockObservation_ifu:
             print("  Simulating and injecting noise...")
             final_sci, final_rms = np.zeros_like(convolved_cube), np.zeros_like(convolved_cube)
             c_angstrom_s = 2.99792458e18
+            factor = self.final_pixel_scale_arcsec / self.initial_pixel_scale_arcsec
             for i, wave in enumerate(self.desired_wave_grid):
                 mag_zp, lim_mag, snr_lim, exp_time = self._get_wave_dependent_param(self.mag_zp, wave), self.limiting_magnitude_wave_func(wave), self._get_wave_dependent_param(self.snr_limit, wave), self._get_wave_dependent_param(self.exposure_time, wave)
+                
                 counts_expected = np.maximum(0, exp_time * (10**(0.4 * (mag_zp - (-2.5 * np.log10(np.clip(convolved_cube[i] * wave**2 / c_angstrom_s, 1e-50, None)) - 48.6)))))
                 sigma_bg_sq = np.maximum(0, (exp_time * (10**(0.4 * (mag_zp - lim_mag))) / snr_lim)**2 - exp_time * (10**(0.4 * (mag_zp - lim_mag)))) / (factor**2)
                 flux_per_count = (10**((mag_zp - 2.5 * np.log10(1.0/exp_time) + 48.6)/(-2.5))) * c_angstrom_s / wave**2
-                if apply_noise_to_cube: final_sci[i] = (stats.poisson.rvs(counts_expected) + np.random.normal(0, np.sqrt(sigma_bg_sq), size=counts_expected.shape)) * flux_per_count
-                else: final_sci[i] = convolved_cube[i]
+                
+                if apply_noise_to_cube: 
+                    final_sci[i] = (stats.poisson.rvs(counts_expected) + np.random.normal(0, np.sqrt(sigma_bg_sq), size=counts_expected.shape)) * flux_per_count
+                else: 
+                    final_sci[i] = convolved_cube[i]
                 final_rms[i] = np.sqrt(counts_expected + sigma_bg_sq) * flux_per_count
 
-            # 6. Reconvert Units
-            print(f"  Converting final data cubes back to original units ({self.original_flux_unit})...")
             key = 'dust' if current_dust_attenuation else 'nodust'
-            self.sci_datacubes[key], self.rms_datacubes[key] = np.zeros_like(final_sci), np.zeros_like(final_rms)
-            for i, wave in enumerate(self.desired_wave_grid):
-                self.sci_datacubes[key][i] = convert_flux_map(final_sci[i], wave, to_unit=self.original_flux_unit, pixel_scale_arcsec=self.final_pixel_scale_arcsec)
-                self.rms_datacubes[key][i] = convert_flux_map(final_rms[i], wave, to_unit=self.original_flux_unit, pixel_scale_arcsec=self.final_pixel_scale_arcsec)
+            self.sci_datacubes[key] = final_sci
+            self.rms_datacubes[key] = final_rms
 
     def save_results_to_fits(self, output_fits_path):
-        """
-        Saves all processed data cubes and the RMS data cubes
-        from `self.sci_datacubes` and `self.rms_datacubes` to a new FITS file.
-        The data is saved in flux per pixel units (erg/s/cm2/A/pixel).
-        """
-        """Saves IFU cubes with headers matching the old module's structure."""
         hdul_out = fits.HDUList()
         prihdr = fits.Header()
-        prihdr['BUNIT'], prihdr['COMMENT'] = self.original_flux_unit, 'Mock IFU Observation Results'
-        prihdr['RES_R'], prihdr['PIXSIZE'] = self.spectral_resolution_R, self.final_pixel_scale_arcsec
-        central_wave = self.desired_wave_grid[len(self.desired_wave_grid) // 2]
-        prihdr['ZP_MAG'] = (self._get_wave_dependent_param(self.mag_zp, central_wave), 'ZP at central wavelength')
-        prihdr['SNR_LIM'] = (self._get_wave_dependent_param(self.snr_limit, central_wave), 'SNR at central wavelength')
-        prihdr['MAG_LIM'] = (float(self.limiting_magnitude_wave_func(central_wave)), 'mag limit at central wavelength')
-        prihdr['EXP_TIME'] = (self._get_wave_dependent_param(self.exposure_time, central_wave), 'Exposure time (s) at central wavelength')
+        prihdr['BUNIT'] = 'erg/s/cm2/A'
+        prihdr['PIXSIZE'] = self.final_pixel_scale_arcsec
         hdul_out.append(fits.PrimaryHDU(header=prihdr))
 
         for key, cube in self.sci_datacubes.items():
-            if cube is not None: hdul_out.append(fits.ImageHDU(data=cube, header=self._create_ifu_header(f'SCI_{key.upper()}', cube.shape, self.original_flux_unit)))
+            if cube is not None: 
+                hdul_out.append(fits.ImageHDU(data=cube, header=self._create_ifu_header(f'SCI_{key.upper()}', cube.shape, 'erg/s/cm2/A')))
         for key, cube in self.rms_datacubes.items():
-            if cube is not None: hdul_out.append(fits.ImageHDU(data=cube, header=self._create_ifu_header(f'RMS_{key.upper()}', cube.shape, self.original_flux_unit)))
+            if cube is not None: 
+                hdul_out.append(fits.ImageHDU(data=cube, header=self._create_ifu_header(f'RMS_{key.upper()}', cube.shape, 'erg/s/cm2/A')))
         
         col = fits.Column(name='WAVELENGTH', format='D', array=self.desired_wave_grid)
         hdul_out.append(fits.BinTableHDU.from_columns([col], name='WAVELENGTH_GRID'))
         hdul_out.writeto(output_fits_path, overwrite=True)
-        hdul_out.close()
         print(f"IFU results saved to {output_fits_path}")
 
     def _create_ifu_header(self, extname, shape, flux_unit):
-        """Helper to create a standard header for IFU cube extensions."""
         hdr = fits.Header()
-        hdr['EXTNAME'] = extname
-        hdr['BUNIT'] = flux_unit
-        hdr['CTYPE1'] = 'WAVE'
-        hdr['CRPIX1'] = 1.0 
+        hdr['EXTNAME'], hdr['BUNIT'] = extname, flux_unit
+        hdr['CTYPE1'], hdr['CUNIT1'] = 'WAVE', 'Angstrom'
         hdr['CRVAL1'] = self.desired_wave_grid[0]
         hdr['CDELT1'] = (self.desired_wave_grid[1] - self.desired_wave_grid[0]) if len(self.desired_wave_grid) > 1 else 0.0
-        hdr['CUNIT1'] = 'Angstrom'
-        #hdr['CTYPE2'] = 'DEC--TAN'
-        hdr['CRPIX2'] = shape[1] / 2.0 + 0.5 
-        hdr['CDELT2'] = self.final_pixel_scale_arcsec
-        hdr['CUNIT2'] = 'arcsec'
-        #hdr['CTYPE3'] = 'RA---TAN'
-        hdr['CRPIX3'] = shape[2] / 2.0 + 0.5 
-        hdr['CDELT3'] = self.final_pixel_scale_arcsec
-        hdr['CUNIT3'] = 'arcsec'
+        hdr['CRPIX2'], hdr['CDELT2'], hdr['CUNIT2'] = shape[1]/2.0 + 0.5, self.final_pixel_scale_arcsec, 'arcsec'
+        hdr['CRPIX3'], hdr['CDELT3'], hdr['CUNIT3'] = shape[2]/2.0 + 0.5, self.final_pixel_scale_arcsec, 'arcsec'
         return hdr
+    
