@@ -1,74 +1,143 @@
 Simulating the Observational Effects
 ====================================
+To bridge the gap between theoretical models and observational data, it is essential to account for the limitations of astronomical instruments. 
 
 
 Adding observational effects on synthetic imaging data 
 ------------------------------------------------------
 
+The ``GalSynMockObservation_imaging`` class in the ``observe`` module transforms idealized synthetic images into realistic mock observations. 
+The process include spatial resapling (to a user-defined pixel scale, matching to the instrument characterictics), PSF convolution, noise simulation and injection. 
+Please refer Abdurro'uf et al. (2026) for detailed descriptions about the algorithm used. 
+
+Below is an example script for adding the observational effects into a synthetic data cube. 
+First, we define the telescope and sky conditions for each filter. 
+This includes providing the PSF images, instrumental zero-points, and the desired noise characteristics.
+
+
 .. code-block:: python
 
-    # select a set of filters whose images will be further processed by adding observational effects
-    filters1 = ['hst_acs_f435w', 'hst_acs_f606w', 'hst_acs_f814w', 'hst_wfc3_ir_f125w', 
-                'hst_wfc3_ir_f140w', 'hst_wfc3_ir_f160w', 'jwst_nircam_f090w', 'jwst_nircam_f115w', 
-                'jwst_nircam_f150w', 'jwst_nircam_f200w', 'jwst_nircam_f277w', 'jwst_nircam_f356w', 
-                'jwst_nircam_f410m', 'jwst_nircam_f444w']
-    filter_transmission_path1 = make_filter_transmission_text_pixedfit(filters1, output_dir="filters")
+    from galsyn import GalSynMockObservation_imaging
+    from galsyn.utils import make_filter_transmission_text_pixedfit
 
-    # pixel size of the PSF images
-    psf_pixel_scales = {'hst_acs_f435w': 0.039999999999999584, 'hst_acs_f606w': 0.039999999999999584, 
-                'hst_acs_f814w': 0.039999999999999584, 'hst_wfc3_ir_f125w': 0.039999999999999584, 
-                'hst_wfc3_ir_f140w': 0.039999999999999584, 'hst_wfc3_ir_f160w': 0.039999999999999584, 
-                'jwst_nircam_f090w': 0.019999999999999792, 'jwst_nircam_f115w': 0.019999999999999792, 
-                'jwst_nircam_f150w': 0.019999999999999792, 'jwst_nircam_f200w': 0.019999999999999792,  
-                'jwst_nircam_f277w': 0.039999999999999584, 'jwst_nircam_f356w': 0.039999999999999584, 
-                'jwst_nircam_f410m': 0.039999999999999584, 'jwst_nircam_f444w': 0.039999999999999584}
+    # select a set of filters to be processed
+    filters = ['hst_acs_f435w', 'hst_acs_f606w', 'hst_acs_f814w', 'hst_wfc3_ir_f125w',
+                'hst_wfc3_ir_f140w', 'hst_wfc3_ir_f160w', 'jwst_nircam_f090w', 'jwst_nircam_f115w',
+                'jwst_nircam_f150w', 'jwst_nircam_f200w', 'jwst_nircam_f277w', 'jwst_nircam_f356w',
+                'jwst_nircam_f410m', 'jwst_nircam_f444w']
+
+    filter_transmission_path1 = make_filter_transmission_text_pixedfit(filters, output_dir="filters")
+
+    # Pixel size of your provided PSF images
+    psf_pixel_scales = {'hst_acs_f435w': 0.04, 'hst_acs_f606w': 0.04,
+                'hst_acs_f814w': 0.04, 'hst_wfc3_ir_f125w': 0.04,
+                'hst_wfc3_ir_f140w': 0.04, 'hst_wfc3_ir_f160w': 0.04,
+                'jwst_nircam_f090w': 0.02, 'jwst_nircam_f115w': 0.02,
+                'jwst_nircam_f150w': 0.02, 'jwst_nircam_f200w': 0.02,
+                'jwst_nircam_f277w': 0.04, 'jwst_nircam_f356w': 0.04,
+                'jwst_nircam_f410m': 0.04, 'jwst_nircam_f444w': 0.04}
 
     # Desired limiting magnitudes to be achieved
-    limiting_magnitude = {'hst_acs_f435w': 29.26534652709961, 'hst_acs_f606w': 28.869548797607422,
-                    'hst_acs_f814w': 29.109628677368164, 'hst_wfc3_ir_f125w': 28.493282318115234,
-                    'hst_wfc3_ir_f140w': 28.17842388153076, 'hst_wfc3_ir_f160w': 28.057647705078125,
-                    'jwst_nircam_f090w': 29.730396270751953, 'jwst_nircam_f115w': 30.158058166503906,
-                    'jwst_nircam_f150w': 29.93120574951172, 'jwst_nircam_f182m': 29.351133346557617,
-                    'jwst_nircam_f200w': 30.098361015319824, 'jwst_nircam_f210m': 29.0757417678833,
-                    'jwst_nircam_f277w': 30.89869499206543, 'jwst_nircam_f335m': 30.47265338897705,
-                    'jwst_nircam_f356w': 30.837305068969727, 'jwst_nircam_f410m': 30.089418411254883,
-                    'jwst_nircam_f444w': 30.196468353271484}
+    limiting_magnitude = {'hst_acs_f435w': 29.3, 'hst_acs_f606w': 29.1,
+                    'hst_acs_f814w': 29.1, 'hst_wfc3_ir_f125w': 28.5,
+                    'hst_wfc3_ir_f140w': 28.2, 'hst_wfc3_ir_f160w': 29.1,
+                    'jwst_nircam_f090w': 29.7, 'jwst_nircam_f115w': 30.2,
+                    'jwst_nircam_f150w': 29.9, 'jwst_nircam_f200w': 30.1, 
+                    'jwst_nircam_f277w': 30.9, 'jwst_nircam_f356w': 30.8,
+                    'jwst_nircam_f410m': 30.1, 'jwst_nircam_f444w': 30.2}
 
-    # Exposure time used in the observations. 
-    exposure_time = {'hst_acs_f435w': 68473.340625, 'hst_acs_f606w': 11525.210546875,
-                    'hst_acs_f814w': 61992.34609375, 'hst_wfc3_ir_f125w': 18281.091796875,
-                    'hst_wfc3_ir_f140w': 6903.4927734375, 'hst_wfc3_ir_f160w': 19381.936328124997,
-                    'jwst_nircam_f090w': 11338.0, 'jwst_nircam_f115w': 22676.0,
-                    'jwst_nircam_f150w': 11338.0, 'jwst_nircam_f182m': 7171.604003906249,
-                    'jwst_nircam_f200w': 11338.0, 'jwst_nircam_f210m': 5375.104101562494,
-                    'jwst_nircam_f277w': 11330.7314453125, 'jwst_nircam_f335m': 8503.0,
-                    'jwst_nircam_f356w': 11328.221875, 'jwst_nircam_f410m': 8503.0,
-                    'jwst_nircam_f444w': 11319.9638671875}
+    # Exposure time used in the observations in seconds.
+    exposure_time = {'hst_acs_f435w': 68473, 'hst_acs_f606w': 11525,
+                    'hst_acs_f814w': 61992, 'hst_wfc3_ir_f125w': 18281,
+                    'hst_wfc3_ir_f140w': 6903, 'hst_wfc3_ir_f160w': 19382,
+                    'jwst_nircam_f090w': 11338, 'jwst_nircam_f115w': 22676,
+                    'jwst_nircam_f150w': 11338, 'jwst_nircam_f200w': 11338, 
+                    'jwst_nircam_f277w': 11330, 'jwst_nircam_f356w': 11328, 
+                    'jwst_nircam_f410m': 8503, 'jwst_nircam_f444w': 11319}
 
-    psf_paths = {} 
-    mag_zp = {}
-    snr_limit = {}
-    aperture_radius_arcsec = {}
-    desired_pixel_scales = {}
-    for ff in filters1:
-        psf_paths[ff] = "PSF_"+ff+".fits"    # path to PSF images
-        mag_zp[ff] = 28.1
-        snr_limit[ff] = 5.0
-        aperture_radius_arcsec[ff] = 0.1
-        desired_pixel_scales[ff] = 0.03
+    # Target depth and instrument parameters
+    psf_paths = {ff: f"PSF_{ff}.fits" for ff in filters}
+    mag_zp = {ff: 28.1 for ff in filters}
+    snr_limit = {ff: 5.0 for ff in filters}
+    aperture_radius_arcsec = {ff: 0.1 for ff in filters}
+    desired_pixel_scales = {ff: 0.03 for ff in filters} # Final resampled resolution
 
-    from galsyn import GalSynMockObservation_imaging
+    fits_file_path = 'galsyn_39_107965_photo.fits'
 
-    fits_file_path = 'galsyn_39_107965.fits'
-    simg = GalSynMockObservation_imaging(fits_file_path, filters1, psf_paths, psf_pixel_scales, mag_zp, 
-                                        limiting_magnitude, snr_limit, aperture_radius_arcsec, 
-                                        exposure_time, filter_transmission_path1, 
-                                        desired_pixel_scales)
+    # Initialize the mock observation object
+    simg = GalSynMockObservation_imaging(fits_file_path, filters, psf_paths, psf_pixel_scales, mag_zp,
+                                        limiting_magnitude, snr_limit, aperture_radius_arcsec,
+                                        exposure_time, filter_transmission_path1, desired_pixel_scales)
+
+    # Start the pipeline: Resampling -> PSF Convolution -> Noise Injection
     simg.process_images(apply_noise_to_image=True, dust_attenuation=True)
 
-    output_fits_path = 'obsimg_galsyn_39_107965_30mas.fits'
+    # Save the resulting science and RMS extensions to a new FITS file
+    output_fits_path = 'obsimg_galsyn_39_107965_photo_30mas.fits'
     simg.save_results_to_fits(output_fits_path=output_fits_path)
 
+
+Now, we check the resulting data cube
+
+.. code-block:: python
+
+    from astropy.io import fits 
+    import matplotlib.pyplot as plt
+    from astropy.visualization import simple_norm, make_lupton_rgb
+
+    cube = fits.open('obsimg_galsyn_39_107965_photo_30mas.fits')
+
+    # Filter configuration
+    fils = ['hst_acs_f606w', 'hst_acs_f814w', 'hst_wfc3_ir_f160w', 'jwst_nircam_f150w', 
+            'jwst_nircam_f277w', 'jwst_nircam_f356w', 'jwst_nircam_f444w']
+    filnames = ['JWST/F606W', 'JWST/F814W', 'JWST/F160W', 'JWST/F150W', 
+                'JWST/F277W', 'JWST/F356W', 'JWST/F444W']
+    nbands = len(fils)
+
+    # RGB components (using JWST NIRCam filters)
+    rgb_fils = ['jwst_nircam_f115w', 'jwst_nircam_f150w', 'jwst_nircam_f200w']
+
+    nrows, ncols = 2, 4
+    fig = plt.figure(figsize=(ncols*2.5, nrows*2.5), dpi=150)
+
+    # RGB Composite
+    ax_rgb = fig.add_subplot(nrows, ncols, 1)
+    factor = 2e+3
+
+    # Access data using the standard 'DUST[FILTER]' extension name 
+    r = cube[f'SCI_DUST_{rgb_fils[2]}'].data * factor
+    g = cube[f'SCI_DUST_{rgb_fils[1]}'].data * factor
+    b = cube[f'SCI_DUST_{rgb_fils[0]}'].data * factor
+
+    rgb = make_lupton_rgb(r, g, b, stretch=50, Q=10)
+    ax_rgb.imshow(rgb, origin='lower')
+    ax_rgb.axis('off') # Cleanly removes all ticks and labels
+
+    # Individual Grayscale Bands
+    for ii in range(nbands):
+        ax = fig.add_subplot(nrows, ncols, ii+2)
+        
+        # Access dust-attenuated imaging data 
+        data = cube[f'SCI_DUST_{fils[ii]}'].data
+        
+        # Apply square-root normalization to improve dynamic range visibility
+        norm = simple_norm(data, 'sqrt', percent=97.5)
+        ax.imshow(data, norm=norm, origin='lower', cmap='gray')
+        ax.axis('off')
+
+        # Add filter labels with a small background box for readability
+        ax.text(0.5, 0.93, filnames[ii], color='white', fontsize=11,
+                ha='center', va='center', transform=ax.transAxes,
+                bbox=dict(facecolor='black', alpha=0.4, lw=0))
+
+    plt.subplots_adjust(hspace=0.02, wspace=0.02)
+    plt.show()
+
+
+.. image:: ../figures/stamp_img2.png
+   :alt: Stamp Observed Image 
+   :align: center
+   :width: 800px
 
 
 Adding observational effects on synthetic IFU data 
