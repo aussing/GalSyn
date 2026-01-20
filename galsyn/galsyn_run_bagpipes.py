@@ -155,7 +155,7 @@ def init_worker(ssp_code_val, snap_z_val, pix_area_kpc2_val,
                 gas_mass_arr, gas_sfr_inst_arr, gas_zmet_arr, gas_log_temp_arr, gas_mass_H_arr, gas_vel_los_proj_arr, gas_coords_arr, 
                 ssp_filepath_val=None, ssp_interpolation_method_val='nearest', 
                 output_pixel_spectra_val=False, output_obs_wave_grid_val=None,
-                dust_method_val='los', av_sfrden_relation_val=None):
+                dust_method_val='los', av_sfrden_relation_val=None, max_dist_neb_val=0.5):
     
     global ssp_wave, ssp_ages_gyr, ssp_logzsol_grid, ssp_stellar_mass_grid, ssp_code_z_sun
     global ssp_stellar_continuum_grid, ssp_nebular_emission_grid 
@@ -168,12 +168,13 @@ def init_worker(ssp_code_val, snap_z_val, pix_area_kpc2_val,
     global _worker_filters, _worker_filter_transmission, _worker_filter_wave_eff, _worker_cosmo
     global _worker_scale_dust_tau, _worker_stars_mass, _worker_stars_age, _worker_stars_zmet, _worker_stars_init_mass, _worker_stars_vel_los_proj, _worker_stars_coords
     global _worker_gas_mass, _worker_gas_sfr_inst, _worker_gas_zmet, _worker_gas_log_temp, _worker_gas_mass_H, _worker_gas_vel_los_proj, _worker_gas_coords
-    global _worker_dust_method, func_interp_av_sfrden
+    global _worker_dust_method, func_interp_av_sfrden, _worker_max_dist_neb
 
     _worker_stars_mass, _worker_stars_age, _worker_stars_zmet = stars_mass_arr, stars_age_arr, stars_zmet_arr
     _worker_stars_init_mass, _worker_stars_vel_los_proj, _worker_stars_coords = stars_init_mass_arr, stars_vel_los_proj_arr, stars_coords_arr
     _worker_gas_mass, _worker_gas_sfr_inst, _worker_gas_zmet = gas_mass_arr, gas_sfr_inst_arr, gas_zmet_arr
     _worker_gas_log_temp, _worker_gas_mass_H, _worker_gas_vel_los_proj, _worker_gas_coords = gas_log_temp_arr, gas_mass_H_arr, gas_vel_los_proj_arr, gas_coords_arr
+    _worker_max_dist_neb = max_dist_neb_val
 
     snap_z, pix_area_kpc2 = snap_z_val, pix_area_kpc2_val
     gas_logu, igm_type = gas_logu_val, igm_type_val
@@ -336,7 +337,7 @@ def _process_pixel_data(ii, jj, star_particle_membership_list, gas_particle_memb
 
                 if sf_g.size > 0:
                     d3d = np.linalg.norm(_worker_stars_coords[star_id] - _worker_gas_coords[sf_g], axis=1)
-                    sf_g_near = sf_g[d3d < 0.3]
+                    sf_g_near = sf_g[d3d < _worker_max_dist_neb]
                     if sf_g_near.size > 0 and np.nansum(_worker_gas_mass[sf_g_near]) > 0:
                         g_v_neb = np.nansum(_worker_gas_mass[sf_g_near] * _worker_gas_vel_los_proj[sf_g_near]) / np.nansum(_worker_gas_mass[sf_g_near])
                 
@@ -414,7 +415,7 @@ def generate_images(sim_file, z, filters, filter_transmission_path, smoothing_le
                     initdim_kpc=200, initdim_mass_fraction=0.99, use_precomputed_ssp=True, 
                     ssp_filepath=None, ssp_interpolation_method='nearest', 
                     output_pixel_spectra=False, rest_wave_min=1000.0, rest_wave_max=30000.0, 
-                    rest_delta_wave=5.0): 
+                    rest_delta_wave=5.0, max_dist_neb=0.5): 
     
     """
     Generates astrophysical images from HDF5 simulation data using Bagpipes.
@@ -498,6 +499,7 @@ def generate_images(sim_file, z, filters, filter_transmission_path, smoothing_le
                                          spectra (Angstroms). Defaults to 30000.0.
         rest_delta_wave (float, optional): Wavelength step in rest-frame for output
                                            spectra (Angstroms). Defaults to 5.0.
+        max_dist_neb (float, optional): Max distance (kpc) to search for gas particles for nebular Doppler shifting. Default to 0.5.
     """
 
     cosmo = define_cosmo(cosmo_str)
@@ -571,8 +573,8 @@ def generate_images(sim_file, z, filters, filter_transmission_path, smoothing_le
                                                                              ssp_filepath, ssp_interpolation_method, 
                                                                              output_pixel_spectra,
                                                                              fixed_global_output_obs_wave.tolist() if isinstance(fixed_global_output_obs_wave, np.ndarray) else fixed_global_output_obs_wave, 
-                                                                             dust_method, av_sfrden_relation))(delayed(_process_pixel_data)(*t) for t in tasks) 
-                                                                             #tuple(fixed_global_output_obs_wave) if fixed_global_output_obs_wave.size==0 else fixed_global_output_obs_wave))(delayed(_process_pixel_data)(*t) for t in tasks)
+                                                                             dust_method, av_sfrden_relation, 
+                                                                             max_dist_neb))(delayed(_process_pixel_data)(*t) for t in tasks) 
 
     for ii, jj, pd in results:
         w_map_stars_mass[ii,jj], w_map_mw_age[ii,jj], w_map_stars_mw_zsol[ii,jj] = pd['map_stars_mass'], pd['map_mw_age'], pd['map_stars_mw_zsol']

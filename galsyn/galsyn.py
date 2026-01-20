@@ -62,6 +62,7 @@ class GalaxySynthesizer:
         self._rest_wave_max = 30000.0
         self._rest_delta_wave = 5.0
         self._ssp_code = 'FSPS'
+        self._max_dist_neb = 0.5   # Max distance (kpc) to search for gas particles for nebular Doppler shifting
 
     def _load_config_defaults(self):
         """
@@ -719,8 +720,19 @@ class GalaxySynthesizer:
         self._rest_delta_wave = float(value)
         if self._rest_delta_wave <= self._rest_wave_min:
             raise ValueError("rest_delta_wave must be greater than rest_wave_min.")
+        
+    @property
+    def max_dist_neb(self):
+        """float: Max distance (kpc) to search for gas particles for nebular Doppler shifting."""
+        return self._max_dist_neb
 
-    # --- Convenience method for setting multiple parameters ---
+    @max_dist_neb.setter
+    def max_dist_neb(self, value):
+        if not isinstance(value, (int, float)) or value <= 0:
+            raise ValueError("max_dist_neb must be a positive number.")
+        self._max_dist_neb = float(value)
+
+    # Convenience method for setting multiple parameters
     def set_params(self, **kwargs):
         """
         Sets multiple parameters at once using keyword arguments.
@@ -816,7 +828,7 @@ class GalaxySynthesizer:
         pass
 
 
-    # --- Method to run the synthesis process ---
+    # Method to run the synthesis process
     def run_synthesis(self):
         """
         Executes the full galaxy image synthesis process.
@@ -899,7 +911,8 @@ class GalaxySynthesizer:
                 'output_pixel_spectra': self.output_pixel_spectra, 
                 'rest_wave_min': self.rest_wave_min, 
                 'rest_wave_max': self.rest_wave_max,
-                'rest_delta_wave': self.rest_delta_wave
+                'rest_delta_wave': self.rest_delta_wave,
+                'max_dist_neb': self.max_dist_neb
             }
             
             # Merge SSP-specific parameters with common parameters

@@ -163,7 +163,7 @@ def init_worker(ssp_code_val, snap_z_val, pix_area_kpc2_val,
                 stars_vel_los_proj_arr, stars_coords_arr, gas_mass_arr, gas_sfr_inst_arr, gas_zmet_arr, 
                 gas_log_temp_arr, gas_mass_H_arr, gas_vel_los_proj_arr, gas_coords_arr, ssp_filepath_val=None, 
                 ssp_interpolation_method_val='nearest', output_pixel_spectra_val=False, 
-                output_obs_wave_grid_val=None, dust_method_val='los', av_sfrden_relation_val=None): 
+                output_obs_wave_grid_val=None, dust_method_val='los', av_sfrden_relation_val=None, max_dist_neb_val=0.5): 
     
     global ssp_wave, ssp_ages_gyr, ssp_logzsol_grid, ssp_stellar_mass_grid, ssp_code_z_sun
     global ssp_stellar_continuum_grid, ssp_nebular_emission_grid 
@@ -177,13 +177,14 @@ def init_worker(ssp_code_val, snap_z_val, pix_area_kpc2_val,
     global _worker_imf_upper_limit, _worker_imf_lower_limit, _worker_imf1, _worker_imf2, _worker_imf3, _worker_vdmc, _worker_mdave
     global _worker_scale_dust_tau, _worker_stars_mass, _worker_stars_age, _worker_stars_zmet, _worker_stars_init_mass, _worker_stars_vel_los_proj, _worker_stars_coords
     global _worker_gas_mass, _worker_gas_sfr_inst, _worker_gas_zmet, _worker_gas_log_temp, _worker_gas_mass_H, _worker_gas_vel_los_proj, _worker_gas_coords
-    global _worker_dust_method, func_interp_av_sfrden
+    global _worker_dust_method, func_interp_av_sfrden, _worker_max_dist_neb
 
     # Map worker arrays
     _worker_stars_mass, _worker_stars_age, _worker_stars_zmet = stars_mass_arr, stars_age_arr, stars_zmet_arr
     _worker_stars_init_mass, _worker_stars_vel_los_proj, _worker_stars_coords = stars_init_mass_arr, stars_vel_los_proj_arr, stars_coords_arr
     _worker_gas_mass, _worker_gas_sfr_inst, _worker_gas_zmet = gas_mass_arr, gas_sfr_inst_arr, gas_zmet_arr
     _worker_gas_log_temp, _worker_gas_mass_H, _worker_gas_vel_los_proj, _worker_gas_coords = gas_log_temp_arr, gas_mass_H_arr, gas_vel_los_proj_arr, gas_coords_arr
+    _worker_max_dist_neb = max_dist_neb_val
 
     # Basic setup
     snap_z, pix_area_kpc2, _worker_imf_type = snap_z_val, pix_area_kpc2_val, imf_type_val
@@ -371,7 +372,7 @@ def _process_pixel_data(ii, jj, star_particle_membership_list, gas_particle_memb
                 sf_g = gas_ids[idxg_f][_worker_gas_sfr_inst[gas_ids[idxg_f]] > 0.0]
                 if sf_g.size > 0:
                     d3d = np.linalg.norm(_worker_stars_coords[star_id] - _worker_gas_coords[sf_g], axis=1)
-                    sf_g_near = sf_g[d3d < 0.3]
+                    sf_g_near = sf_g[d3d < _worker_max_dist_neb]
                     if sf_g_near.size > 0 and np.nansum(_worker_gas_mass[sf_g_near]) > 0:
                         g_v_neb = np.nansum(_worker_gas_mass[sf_g_near] * _worker_gas_vel_los_proj[sf_g_near]) / np.nansum(_worker_gas_mass[sf_g_near])
                 w_d_n, n_e_d = doppler_shift_spectrum(ssp_wave, n_em, g_v_neb)
@@ -461,7 +462,7 @@ def generate_images(sim_file, z, filters, filter_transmission_path, dim_kpc=None
                     salim_a1=2.71, salim_a2= -0.191, salim_a3=0.0121, salim_RV=3.15, salim_B=3.15, 
                     initdim_kpc=200, initdim_mass_fraction=0.99, use_precomputed_ssp=True, ssp_filepath=None, 
                     ssp_interpolation_method='nearest', output_pixel_spectra=False, rest_wave_min=1000.0, 
-                    rest_wave_max=30000.0, rest_delta_wave=5.0):
+                    rest_wave_max=30000.0, rest_delta_wave=5.0, max_dist_neb=0.5):
     """
     Generates astrophysical images from HDF5 simulation data with parallelized pixel calculations.
     Allows choice between using pre-computed SSP spectra from an HDF5 file or
@@ -527,6 +528,7 @@ def generate_images(sim_file, z, filters, filter_transmission_path, dim_kpc=None
         rest_wave_min (float, optional): Minimum rest-frame wavelength for output spectra (Angstrom). Defaults to 1000.0.
         rest_wave_max (float, optional): Maximum rest-frame wavelength for output spectra (Angstrom). Defaults to 30000.0.
         rest_delta_wave (float, optional): Incremental wavelength in rest-frame for output spectra (Angstrom). Defaults to 5.0.
+        max_dist_neb (float, optional): Max distance (kpc) to search for gas particles for nebular Doppler shifting. Default to 0.5.
     """ 
     cosmo = define_cosmo(cosmo_str)
     print ('Processing '+sim_file)
@@ -607,7 +609,8 @@ def generate_images(sim_file, z, filters, filter_transmission_path, dim_kpc=None
                                      g_sfr, g_z, g_lt, g_mh, g_v_los, g_c, 
                                      ssp_filepath, ssp_interpolation_method, 
                                      output_pixel_spectra, f_g_o_w.tolist(),
-                                     dust_method, av_sfrden_relation))(delayed(_process_pixel_data)(*t) for t in tasks)
+                                     dust_method, av_sfrden_relation,
+                                     max_dist_neb))(delayed(_process_pixel_data)(*t) for t in tasks)
 
     for ii, jj, pd in results:
         w_map_stars_mass[ii,jj], w_map_mw_age[ii,jj], w_map_stars_mw_zsol[ii,jj] = pd['map_stars_mass'], pd['map_mw_age'], pd['map_stars_mw_zsol']
