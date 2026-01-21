@@ -47,8 +47,6 @@ Below, is an example script for reconstructing spatially resolved SFH of a simul
     sfh.reconstruct_sfh()
 
 
-Check the resulting data cube
------------------------------
 
 In the following script, we plot star formation and chemical eenrichment histories of spatial regions within central 3 kpc radius and the disk (3-15 kpc). 
 
