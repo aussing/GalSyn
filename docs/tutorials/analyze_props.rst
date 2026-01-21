@@ -67,22 +67,17 @@ The script below demonstrates how to visualize these spatially resolved phsyical
         ax = axes[i + 1] # Offset by 1 to skip the RGB panel
         
         data = hdulist[ext_name].data
-        
-        # Velocity Logic (Checks for 'VEL_LOS' in the HDU name)
-        if 'VEL_LOS' in ext_name: 
 
+        # Inside your loop, before calling ax.imshow:
+        if 'VEL_LOS' in ext_name:
+            # 1. Create a mask for values that are exactly zero 
+            # (or very close to it, depending on your data)
+            masked_data = np.ma.masked_equal(data, 0.0)
+            
             cmap = cm.get_cmap('bwr').copy()
             cmap.set_bad(color='black')
             
-            valid_data = data[np.isfinite(data)]
-            if len(valid_data) > 0:
-                v_limit = np.percentile(np.abs(valid_data), 85)
-                # Ensure v_limit isn't zero to avoid errors
-                v_limit = max(v_limit, 1.0) 
-            else:
-                v_limit = 200
-                
-            im = ax.imshow(data, origin='lower', cmap=cmap, vmin=-v_limit, vmax=v_limit)
+            im = ax.imshow(masked_data, origin='lower', cmap=cmap, vmin=-300, vmax=300)
 
         else:
             cmap = cm.get_cmap('inferno').copy()

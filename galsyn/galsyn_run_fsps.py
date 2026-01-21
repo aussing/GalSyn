@@ -85,13 +85,15 @@ _worker_gas_coords = None
 _lw_wave_min_rest = 1000.0 
 _lw_wave_max_rest = 30000.0 
 
+
 def rebin_map(data, factor, mode='sum'):
     """
-    Rebins a 2D or 3D array with float factors and robust NaN handling.
-    Updated to use grid_mode=True for astronomical pixel area conservation.
+    Rebins a 2D or 3D array with float factors and robust NaN/zero handling.
+    Updated to prevent dilution of physical properties by empty pixels.
     
-    'sum' preserves total flux/mass.
-    'mean' preserves average property values (Age, Temperature).
+    'sum'  : Preserves total flux/mass (flux-conserving).
+    'mean' : Preserves average property values (Age, Temperature, Velocity) 
+             by averaging only pixels that actually contain data.
     """
     if factor == 1.0:
         return data
@@ -100,14 +102,31 @@ def rebin_map(data, factor, mode='sum'):
     # Handle spatial scaling (assumes Y, X are first two dims)
     zoom_factors = (zoom_rate, zoom_rate, 1) if data.ndim == 3 else (zoom_rate, zoom_rate)
 
-    # Use order=1 (bilinear) as it is the most stable for physical data.
-    # grid_mode=True treats pixels as having area, which is correct for fluxes and masses.
-    # mode='grid-constant' ensures proper boundary handling without pixel shrinkage.
-    rescaled = zoom(data, zoom_factors, order=1, prefilter=False, 
-                    grid_mode=True, mode='grid-constant')
+    if mode == 'mean':
+        # Create a mask of pixels containing valid physical data (non-zero and non-NaN)
+        # This prevents dilution of properties like Velocity or Z by empty pixels.
+        mask = (data != 0) & (~np.isnan(data))
+        
+        # Prepare weighted data (zero out invalid pixels)
+        data_weighted = np.where(mask, data, 0.0)
+        
+        # Resample both the data and the mask using bilinear interpolation
+        # grid_mode=True ensures we treat pixels as areas, which is standard in astronomy.
+        sum_val = zoom(data_weighted, zoom_factors, order=1, prefilter=False, 
+                       grid_mode=True, mode='grid-constant')
+        count_val = zoom(mask.astype(float), zoom_factors, order=1, prefilter=False, 
+                         grid_mode=True, mode='grid-constant')
+        
+        # Calculate the local mean: divide resampled values by resampled mask
+        # This effectively calculates: (Sum of valid sub-pixels) / (Number of valid sub-pixels)
+        rescaled = np.divide(sum_val, count_val, out=np.zeros_like(sum_val), where=count_val > 0)
 
-    if mode == 'sum':
-        # Apply the area-scaling factor
+    elif mode == 'sum':
+        # Use order=1 (bilinear) as it is the most stable for physical data.
+        rescaled = zoom(data, zoom_factors, order=1, prefilter=False, 
+                        grid_mode=True, mode='grid-constant')
+        
+        # Apply the area-scaling factor to preserve total flux/mass
         rescaled = rescaled * (factor**2)
         
         # Enforce exact flux conservation (ignoring NaNs)
@@ -122,21 +141,8 @@ def rebin_map(data, factor, mode='sum'):
             if sum_out != 0 and not np.isnan(sum_out):
                 rescaled *= (sum_in / sum_out)
 
-    elif mode == 'mean':
-        # Enforce property conservation
-        # Ensures the average of the new map matches the average of the old map
-        if data.ndim == 3:
-            mean_in = np.nanmean(data, axis=(0, 1))
-            mean_out = np.nanmean(rescaled, axis=(0, 1))
-            nonzero = (mean_out != 0) & (~np.isnan(mean_out))
-            rescaled[..., nonzero] *= (mean_in[nonzero] / mean_out[nonzero])
-        else:
-            mean_in = np.nanmean(data)
-            mean_out = np.nanmean(rescaled)
-            if mean_out != 0 and not np.isnan(mean_out):
-                rescaled *= (mean_in / mean_out)
-
     return rescaled
+
 
 def _load_filter_transmission_from_paths(filters_list, filter_transmission_path_dict):
     filter_transmission_data = {}
