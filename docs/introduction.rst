@@ -10,8 +10,8 @@ of galaxy simulations to generate synthetic data cubes that directly mimic the r
 
 Two primary methods exist for this: physically rigorous but computationally expensive radiative transfer codes, 
 and more efficient but less complex particle-by-particle spectral modeling techniques. 
-GalSyn was developed to facilitate an efficient particle-based spectral modeling with extensive flexibility, 
-allowing researchers to systematically explore how different physical assumptions impact the emergent light from galaxies.
+GalSyn is developed to facilitate an efficient particle-based spectral modeling with extensive flexibility, 
+allowing users to systematically explore how different physical assumptions impact the emergent light from galaxies.
 
 **GalSyn** is a powerful and flexible Python package designed to generate synthetic spectrophotometric galaxy observations 
 from the outputs of hydrodynamical simulations. Using a highly customizable particle-based spectral modeling approach, 
