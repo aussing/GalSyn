@@ -207,8 +207,8 @@ def init_worker(ssp_code_val, snap_z_val, pix_area_kpc2_val,
     # Dust Framework Setup
     _worker_dust_method = dust_method_val
     if _worker_dust_method == 'sfr_AV' and isinstance(av_sfrden_relation_val, dict):
-        func_interp_av_sfrden = interp1d(av_sfrden_relation_val['SFR_density'], 
-                                         av_sfrden_relation_val['AV'], 
+        func_interp_av_sfrden = interp1d(av_sfrden_relation_val['log_SFR_density'], 
+                                         av_sfrden_relation_val['log_AV'], 
                                          bounds_error=False, fill_value='extrapolate')
 
     if use_precomputed_ssp:
@@ -339,8 +339,8 @@ def _process_pixel_data(ii, jj, star_particle_membership_list, gas_particle_memb
     # Effective AV calculation for sfr_AV method
     effective_av = 0.0
     if _worker_dust_method == 'sfr_AV' and func_interp_av_sfrden is not None:
-        sfr_density = pixel_results['map_sfr_inst'] / pix_area_kpc2
-        effective_av = float(func_interp_av_sfrden(sfr_density))
+        sfr_density = pixel_results['map_sfr_100'] / pix_area_kpc2
+        effective_av = np.power(10.0, func_interp_av_sfrden(np.log10(sfr_density)))
 
     if len(star_ids) > 0:
         array_spec, array_spec_dust, array_AV, array_tauV, array_L_nodust, array_L_dust = [], [], [], [], [], []
@@ -517,7 +517,7 @@ def generate_images(sim_file, z, filters, filter_transmission_path, dim_kpc=None
                                         
                                         - 'sfr_AV': Calculates an effective A_V for the entire pixel/grid cell based on the instantaneous SFR surface density (Msun/yr/kpc^2).
 
-        av_sfrden_relation (dict, optional): A dictionary defining the proportionality between SFR surface density and A_V. Required if dust_method='sfr_AV'. Expected format: {'AV': [values], 'SFR_density': [values]}. The units for 'SFR_density' should be Msun/yr/kpc^2.
+        av_sfrden_relation (dict, optional): A dictionary defining the proportionality between SFR surface density and A_V in logarithmic scale. Required if dust_method='sfr_AV'. Expected format: {'log_AV': [values], 'log_SFR_density': [values]}. The units for 'SFR_density' should be Msun/yr/kpc^2. In the simulation, the SFR density is calculated with 100 Myr timescale SFR. Defaults to None.
         dust_law (int, optional): Dust attenuation law type. Defaults to 0.
         bump_amp (float, optional): UV bump amplitude. Defaults to 0.85.
         bump_dwave (float, optional): Width (FWHM) of the dust attenuation bump in units of micron, as parameterized with the Drude profile. Defaults to 0.035 micron.

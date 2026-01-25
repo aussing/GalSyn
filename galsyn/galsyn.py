@@ -425,13 +425,14 @@ class GalaxySynthesizer:
 
     @dust_method.setter
     def dust_method(self, value):
+        """Dust modeling method for diffuse ISM. Options are: 'los' or 'sfr_AV'. sfr_AV uses the log(AV)-log(SFR density) relation with SFR being calculated on 100 Myr timescale."""
         if value not in ['los', 'sfr_AV']:
             raise ValueError("dust_method must be either 'los' or 'sfr_AV'.")
         self._dust_method = value
 
     @property
     def av_sfrden_relation(self):
-        """dict: Mapping {'AV': [], 'SFR_density': []}."""
+        """dict: Mapping {'log_AV': [], 'log_SFR_density': []}."""
         return self._av_sfrden_relation
 
     @av_sfrden_relation.setter

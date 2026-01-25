@@ -68,7 +68,7 @@ The dust_method parameter in the GalaxySynthesizer class determines how the V-ba
 
     * Line-of-Sight ('los'): This is the default, most physically motivated method. It calculates the optical depth for each individual star particle by integrating the cold hydrogen gas column density and metallicity along the specific line-of-sight to the observer. 
 
-    * SFR Surface Density ('sfr_AV'): An alternative framework that calculates an effective :math:`A_V` for a pixel based on its instantaneous SFR surface density (:math:`M_{\odot}\,\text{yr}^{-1}\,\text{kpc}^{-2}`). This method utilizes the ``av_sfrden_relation`` to apply empirical relationships between star formation activity and dust obscuration. 
+    * SFR Surface Density ('sfr_AV'): An alternative framework that calculates an effective :math:`A_V` for a pixel based on its SFR surface density (:math:`M_{\odot}\,\text{yr}^{-1}\,\text{kpc}^{-2}`). This method utilizes the ``av_sfrden_relation`` to apply empirical relationships between star formation activity and dust obscuration. 
 
 Once the :math:`A_V` is determined, GalSyn applies a specific attenuation curve (``dust_law``) to the spectrum.  The following options are available:
 
