@@ -13,6 +13,7 @@ from scipy.interpolate import interp1d, RegularGridInterpolator
 from scipy.integrate import simpson
 import importlib.resources
 from scipy.ndimage import zoom
+import warnings
 
 import fsps
 
@@ -339,8 +340,9 @@ def _process_pixel_data(ii, jj, star_particle_membership_list, gas_particle_memb
     # Effective AV calculation for sfr_AV method
     effective_av = 0.0
     if _worker_dust_method == 'sfr_AV' and func_interp_av_sfrden is not None:
-        sfr_density = pixel_results['map_sfr_100'] / pix_area_kpc2
-        effective_av = np.power(10.0, func_interp_av_sfrden(np.log10(sfr_density)))
+        sfr_density = pixel_results['map_sfr_inst'] / pix_area_kpc2
+        with np.errstate(divide='ignore'):
+            effective_av = np.power(10.0, func_interp_av_sfrden(np.log10(sfr_density)))
 
     if len(star_ids) > 0:
         array_spec, array_spec_dust, array_AV, array_tauV, array_L_nodust, array_L_dust = [], [], [], [], [], []
