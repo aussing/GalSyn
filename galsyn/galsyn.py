@@ -58,7 +58,7 @@ class GalaxySynthesizer:
         self._ssp_filepath = None
         self._ssp_interpolation_method = 'nearest'
         self._output_pixel_spectra = False
-        self._rest_wave_min = 1000.0
+        self._rest_wave_min = 500.0
         self._rest_wave_max = 30000.0
         self._rest_delta_wave = 5.0
         self._ssp_code = 'FSPS'

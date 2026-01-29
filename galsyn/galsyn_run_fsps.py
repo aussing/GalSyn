@@ -5,7 +5,7 @@ from astropy.io import fits
 from .imgutils import *
 from .utils import *
 from .dust import *
-from joblib import Parallel, delayed
+from joblib import Parallel, delayed, dump, load
 from tqdm.auto import tqdm
 from tqdm_joblib import tqdm_joblib
 import multiprocessing
@@ -14,6 +14,9 @@ from scipy.integrate import simpson
 import importlib.resources
 from scipy.ndimage import zoom
 import warnings
+import tempfile
+import shutil
+import gc
 
 import fsps
 
@@ -87,7 +90,7 @@ _worker_gas_mass_H = None
 _worker_gas_vel_los_proj = None
 _worker_gas_coords = None
 
-_lw_wave_min_rest = 1000.0 
+_lw_wave_min_rest = 500.0 
 _lw_wave_max_rest = 30000.0 
 
 
@@ -223,7 +226,8 @@ def init_worker(ssp_code_val, snap_z_val, pix_area_kpc2_val, filters_list_val, f
                 gas_log_temp_arr, gas_mass_H_arr, gas_vel_los_proj_arr, gas_coords_arr, ssp_filepath_val=None, 
                 ssp_interpolation_method_val='nearest', output_pixel_spectra_val=False, 
                 output_obs_wave_grid_val=None, dust_method_val='los', av_sfrden_relation_val=None, 
-                max_dist_neb_val=0.5, log_xi_ion_val=25.39, epsilon_val=0.3): 
+                max_dist_neb_val=0.5, log_xi_ion_val=25.39, epsilon_val=0.3, 
+                ssp_mmap_path=None, ssp_meta=None): 
     
     global ssp_wave, ssp_ages_gyr, ssp_logzsol_grid, ssp_logu_grid, ssp_stellar_mass_grid, ssp_code_z_sun
     global ssp_stellar_continuum_grid, ssp_nebular_emission_grid 
@@ -239,6 +243,18 @@ def init_worker(ssp_code_val, snap_z_val, pix_area_kpc2_val, filters_list_val, f
     global _worker_gas_mass, _worker_gas_sfr_inst, _worker_gas_zmet, _worker_gas_log_temp, _worker_gas_mass_H, _worker_gas_vel_los_proj, _worker_gas_coords
     global _worker_dust_method, func_interp_av_sfrden, _worker_max_dist_neb
     global _worker_log_xi_ion, _worker_epsilon
+
+    if use_precomputed_ssp_val and ssp_mmap_path:
+        # Load metadata passed from the main process
+        ssp_wave = ssp_meta['wave']
+        ssp_ages_gyr = ssp_meta['ages']
+        ssp_logzsol_grid = ssp_meta['logzsol']
+        ssp_logu_grid = ssp_meta['logu']
+        
+        # Memory-map the large arrays
+        ssp_stellar_continuum_grid = load(os.path.join(ssp_mmap_path, 'cont.mmap'), mmap_mode='r')
+        ssp_nebular_emission_grid = load(os.path.join(ssp_mmap_path, 'neb.mmap'), mmap_mode='r')
+        ssp_stellar_mass_grid = load(os.path.join(ssp_mmap_path, 'mass.mmap'), mmap_mode='r')
 
     # Map worker arrays
     _worker_stars_mass, _worker_stars_age, _worker_stars_zmet = stars_mass_arr, stars_age_arr, stars_zmet_arr
@@ -268,23 +284,33 @@ def init_worker(ssp_code_val, snap_z_val, pix_area_kpc2_val, filters_list_val, f
                                          av_sfrden_relation_val['log_AV'], 
                                          bounds_error=False, fill_value='extrapolate')
 
-    if use_precomputed_ssp:
-        with h5py.File(ssp_filepath_val, 'r') as f_ssp:
-            ssp_wave = f_ssp['wavelength'][:]
-            ssp_ages_gyr = f_ssp['ages_gyr'][:]
-            ssp_logzsol_grid = f_ssp['logzsol'][:]
-            ssp_logu_grid = f_ssp['logu_grid'][:]
-            ssp_stellar_mass_grid = f_ssp['stellar_mass'][:]
-            ssp_stellar_continuum_grid = f_ssp['stellar_continuum_spectra'][:]
-            ssp_nebular_emission_grid = f_ssp['nebular_emission_spectra'][:]
-            ssp_code_z_sun = f_ssp.attrs['z_sun'] 
-            method = ssp_interpolation_method if ssp_interpolation_method in ['linear', 'cubic'] else None
-            if method:
-                # Define 3D grid coordinates: (Age, logZ_star, logU)
-                grid_coords = (ssp_ages_gyr, ssp_logzsol_grid, ssp_logu_grid)
-                _global_ssp_stellar_continuum_interpolator = RegularGridInterpolator(grid_coords, ssp_stellar_continuum_grid, method=method, bounds_error=False, fill_value=0.0)
-                _global_ssp_nebular_emission_interpolator = RegularGridInterpolator(grid_coords, ssp_nebular_emission_grid, method=method, bounds_error=False, fill_value=0.0)
-                _global_ssp_stellar_mass_interpolator = RegularGridInterpolator(grid_coords, ssp_stellar_mass_grid, method=method, bounds_error=False, fill_value=0.0)
+    if use_precomputed_ssp_val:
+        if ssp_mmap_path:
+            ssp_wave = ssp_meta['wave']
+            ssp_ages_gyr = ssp_meta['ages']
+            ssp_logzsol_grid = ssp_meta['logzsol']
+            ssp_logu_grid = ssp_meta['logu']
+            ssp_stellar_continuum_grid = load(os.path.join(ssp_mmap_path, 'cont.mmap'), mmap_mode='r')
+            ssp_nebular_emission_grid = load(os.path.join(ssp_mmap_path, 'neb.mmap'), mmap_mode='r')
+            ssp_stellar_mass_grid = load(os.path.join(ssp_mmap_path, 'mass.mmap'), mmap_mode='r')
+        elif ssp_filepath_val is not None:
+            with h5py.File(ssp_filepath_val, 'r') as f_ssp:
+                ssp_wave = f_ssp['wavelength'][:]
+                ssp_ages_gyr = f_ssp['ages_gyr'][:]
+                ssp_logzsol_grid = f_ssp['logzsol'][:]
+                ssp_logu_grid = f_ssp['logu_grid'][:]
+                ssp_stellar_mass_grid = f_ssp['stellar_mass'][:]
+                ssp_stellar_continuum_grid = f_ssp['stellar_continuum_spectra'][:]
+                ssp_nebular_emission_grid = f_ssp['nebular_emission_spectra'][:]
+                ssp_code_z_sun = f_ssp.attrs['z_sun'] 
+        
+        # Initialize interpolators only after data is loaded
+        method = ssp_interpolation_method_val if ssp_interpolation_method_val in ['linear', 'cubic'] else None
+        if method:
+            grid_coords = (ssp_ages_gyr, ssp_logzsol_grid, ssp_logu_grid)
+            _global_ssp_stellar_continuum_interpolator = RegularGridInterpolator(grid_coords, ssp_stellar_continuum_grid, method=method, bounds_error=False, fill_value=None)
+            _global_ssp_nebular_emission_interpolator = RegularGridInterpolator(grid_coords, ssp_nebular_emission_grid, method=method, bounds_error=False, fill_value=None)
+            _global_ssp_stellar_mass_interpolator = RegularGridInterpolator(grid_coords, ssp_stellar_mass_grid, method=method, bounds_error=False, fill_value=None)
 
     else:
         sp_instance = fsps.StellarPopulation(zcontinuous=1)
@@ -446,6 +472,7 @@ def _process_pixel_data(ii, jj, star_particle_membership_list, gas_particle_memb
                     ia = np.argmin(np.abs(ssp_ages_gyr - _worker_stars_age[star_id]))
                     iz = np.argmin(np.abs(ssp_logzsol_grid - particle_logzsol))
                     iu = np.argmin(np.abs(ssp_logu_grid - dynamic_logu))
+
                     s_cont = ssp_stellar_continuum_grid[ia, iz, iu, :]
                     n_em = ssp_nebular_emission_grid[ia, iz, iu, :]
                     s_mass = ssp_stellar_mass_grid[ia, iz, iu]
@@ -463,6 +490,9 @@ def _process_pixel_data(ii, jj, star_particle_membership_list, gas_particle_memb
                 sp_instance.params["add_neb_emission"] = 0
                 _, s_cont = sp_instance.get_spectrum(peraa=True, tage=_worker_stars_age[star_id])
                 n_em, s_mass = s_tot - s_cont, sp_instance.stellar_mass
+
+            #if s_mass <= 0:
+            #    continue
 
             norm = _worker_stars_mass[star_id] / s_mass
 
@@ -513,10 +543,21 @@ def _process_pixel_data(ii, jj, star_particle_membership_list, gas_particle_memb
                 al_bc = unresolved_dust_birth_cloud_Alambda_per_AV(ssp_wave, dust_index_bc=dust_index_bc) * d_AV * dust_eta
                 spec_dust *= 10.0**(-0.4*al_bc)
 
+            # ensure dimensional consistency
+            if spec.shape[0] != ssp_wave.shape[0]:
+                # This explicitly catches the mismatch causing the IndexError
+                raise ValueError(f"Shape Mismatch: spec length {spec.shape[0]} != grid length {ssp_wave.shape[0]}")
+
             array_spec.append(spec*norm)
             array_spec_dust.append(spec_dust*norm)
-            array_L_nodust.append(simpson(spec[lw_wave_idx]*norm, ssp_wave[lw_wave_idx]) if lw_wave_idx.size > 1 else 0.0)
-            array_L_dust.append(simpson(spec_dust[lw_wave_idx]*norm, ssp_wave[lw_wave_idx]) if lw_wave_idx.size > 1 else 0.0)
+
+            # Slicing with lw_wave_idx is now safe
+            if lw_wave_idx.size > 1:
+                array_L_nodust.append(simpson(spec[lw_wave_idx]*norm, ssp_wave[lw_wave_idx]))
+                array_L_dust.append(simpson(spec_dust[lw_wave_idx]*norm, ssp_wave[lw_wave_idx]))
+            else:
+                array_L_nodust.append(0.0)
+                array_L_dust.append(0.0)
             
         pixel_results['map_dust_mean_AV'] = np.nanmean(array_AV) if array_AV else np.nan
         pixel_results['map_dust_mean_tauV'] = np.nanmean(array_tauV) if array_tauV else np.nan
@@ -565,7 +606,7 @@ def generate_images(sim_file, z, filters, filter_transmission_path, dim_kpc=None
                     av_sfrden_relation=None, dust_law=0, bump_amp=0.85, bump_dwave=0.035, salim_a0=-4.30, 
                     salim_a1=2.71, salim_a2= -0.191, salim_a3=0.0121, salim_RV=3.15, salim_B=3.15, 
                     initdim_kpc=200, initdim_mass_fraction=0.99, use_precomputed_ssp=True, ssp_filepath=None, 
-                    ssp_interpolation_method='nearest', output_pixel_spectra=False, rest_wave_min=1000.0, 
+                    ssp_interpolation_method='nearest', output_pixel_spectra=False, rest_wave_min=500.0, 
                     rest_wave_max=30000.0, rest_delta_wave=5.0, max_dist_neb=0.5, log_xi_ion=25.39, epsilon=0.3):
     """
     Generates astrophysical images from HDF5 simulation data with parallelized pixel calculations.
@@ -676,6 +717,26 @@ def generate_images(sim_file, z, filters, filter_transmission_path, dim_kpc=None
     dimx, dimy = g_inf['num_pixels_x'], g_inf['num_pixels_y']
     #print ('Cutout size: %d x %d pix or %d x %d kpc' % (dimx,dimy,dim_kpc,dim_kpc))
 
+    # shared memory arrays for worker processes
+    ssp_mmap_dir = tempfile.mkdtemp()
+    ssp_meta = {}
+    
+    if use_precomputed_ssp and ssp_filepath:
+        with h5py.File(ssp_filepath, 'r') as f_ssp:
+            ssp_meta['wave'] = f_ssp['wavelength'][:]
+            ssp_meta['ages'] = f_ssp['ages_gyr'][:]
+            ssp_meta['logzsol'] = f_ssp['logzsol'][:]
+            ssp_meta['logu'] = f_ssp['logu_grid'][:]
+            ssp_meta['z_sun'] = f_ssp.attrs.get('z_sun', 0.019)
+            
+            # Cast to float32 to save 50% memory [Option 2]
+            # Dump to disk for shared memory access [Option 1]
+            dump(f_ssp['stellar_continuum_spectra'][:].astype(np.float32), os.path.join(ssp_mmap_dir, 'cont.mmap'))
+            dump(f_ssp['nebular_emission_spectra'][:].astype(np.float32), os.path.join(ssp_mmap_dir, 'neb.mmap'))
+            dump(f_ssp['stellar_mass'][:].astype(np.float32), os.path.join(ssp_mmap_dir, 'mass.mmap'))
+
+            gc.collect()
+
     # Dust normalization loading
     if isinstance(scale_dust_redshift, str):
         data = np.loadtxt(str(importlib.resources.files('galsyn.data').joinpath("Vogelsberger20_scale_dust.txt")))
@@ -700,39 +761,44 @@ def generate_images(sim_file, z, filters, filter_transmission_path, dim_kpc=None
     tasks = [(ii, jj, s_mem[ii][jj], g_mem[ii][jj]) for ii in range(dimy) for jj in range(dimx)]
     tasks.sort(key=lambda x: len(x[2]) + len(x[3]), reverse=True)
 
-    with tqdm_joblib(total=len(tasks), desc="Processing pixels") as pb:
-        results = Parallel(n_jobs=n_jobs, initializer=init_worker, 
-                           initargs=(ssp_code, snap_z, pix_area_kpc2_working, 
-                                     filters, filter_transmission_path, 
-                                     imf_type, imf_upper_limit, imf_lower_limit, 
-                                     imf1, imf2, imf3, vdmc, mdave, 
-                                     igm_type, dust_index_bc, dust_index, 
-                                     t_esc, dust_eta, s_d_t, cosmo_str, 
-                                     dust_law, bump_amp, bump_dwave, 
-                                     salim_a0, salim_a1, salim_a2, salim_a3, 
-                                     salim_RV, salim_B, use_precomputed_ssp, 
-                                     s_m, s_age, s_z, s_im, s_v_los, s_c, g_m, 
-                                     g_sfr, g_z, g_lt, g_mh, g_v_los, g_c, 
-                                     ssp_filepath, ssp_interpolation_method, 
-                                     output_pixel_spectra, f_g_o_w.tolist(),
-                                     dust_method, av_sfrden_relation,
-                                     max_dist_neb, log_xi_ion, epsilon))(delayed(_process_pixel_data)(*t) for t in tasks)
+    try:
+        with tqdm_joblib(total=len(tasks), desc="Processing pixels") as pb:
+            results = Parallel(n_jobs=n_jobs, initializer=init_worker, 
+                            initargs=(ssp_code, snap_z, pix_area_kpc2_working, 
+                                        filters, filter_transmission_path, 
+                                        imf_type, imf_upper_limit, imf_lower_limit, 
+                                        imf1, imf2, imf3, vdmc, mdave, 
+                                        igm_type, dust_index_bc, dust_index, 
+                                        t_esc, dust_eta, s_d_t, cosmo_str, 
+                                        dust_law, bump_amp, bump_dwave, 
+                                        salim_a0, salim_a1, salim_a2, salim_a3, 
+                                        salim_RV, salim_B, use_precomputed_ssp, 
+                                        s_m, s_age, s_z, s_im, s_v_los, s_c, g_m, 
+                                        g_sfr, g_z, g_lt, g_mh, g_v_los, g_c, 
+                                        None, ssp_interpolation_method, 
+                                        output_pixel_spectra, f_g_o_w.tolist(),
+                                        dust_method, av_sfrden_relation,
+                                        max_dist_neb, log_xi_ion, epsilon, 
+                                        ssp_mmap_dir, ssp_meta))(delayed(_process_pixel_data)(*t) for t in tasks)
 
-    for ii, jj, pd in results:
-        w_map_stars_mass[ii,jj], w_map_mw_age[ii,jj], w_map_stars_mw_zsol[ii,jj] = pd['map_stars_mass'], pd['map_mw_age'], pd['map_stars_mw_zsol']
-        w_map_sfr_100[ii,jj], w_map_sfr_30[ii,jj], w_map_sfr_10[ii,jj] = pd['map_sfr_100'], pd['map_sfr_30'], pd['map_sfr_10']
-        w_map_gas_mass[ii,jj], w_map_sfr_inst[ii,jj], w_map_gas_mw_zsol[ii,jj] = pd['map_gas_mass'], pd['map_sfr_inst'], pd['map_gas_mw_zsol']
-        w_map_dust_mean_tauV[ii,jj], w_map_dust_mean_AV[ii,jj] = pd['map_dust_mean_tauV'], pd['map_dust_mean_AV']
-        w_map_flux[ii,jj], w_map_flux_dust[ii,jj] = pd['map_flux'], pd['map_flux_dust']
-        w_map_gas_logu[ii, jj] = pd['map_gas_logu']
+        for ii, jj, pd in results:
+            w_map_stars_mass[ii,jj], w_map_mw_age[ii,jj], w_map_stars_mw_zsol[ii,jj] = pd['map_stars_mass'], pd['map_mw_age'], pd['map_stars_mw_zsol']
+            w_map_sfr_100[ii,jj], w_map_sfr_30[ii,jj], w_map_sfr_10[ii,jj] = pd['map_sfr_100'], pd['map_sfr_30'], pd['map_sfr_10']
+            w_map_gas_mass[ii,jj], w_map_sfr_inst[ii,jj], w_map_gas_mw_zsol[ii,jj] = pd['map_gas_mass'], pd['map_sfr_inst'], pd['map_gas_mw_zsol']
+            w_map_dust_mean_tauV[ii,jj], w_map_dust_mean_AV[ii,jj] = pd['map_dust_mean_tauV'], pd['map_dust_mean_AV']
+            w_map_flux[ii,jj], w_map_flux_dust[ii,jj] = pd['map_flux'], pd['map_flux_dust']
+            w_map_gas_logu[ii, jj] = pd['map_gas_logu']
 
-        if output_pixel_spectra: 
-            w_map_spec_n[ii,jj], w_map_spec_d[ii,jj] = pd['obs_spectra_nodust_igm'], pd['obs_spectra_dust_igm']
-        
-        w_map_lw['age_n'][ii,jj], w_map_lw['age_d'][ii,jj], w_map_lw['z_n'][ii,jj], w_map_lw['z_d'][ii,jj] = pd['map_lw_age_nodust'], pd['map_lw_age_dust'], pd['map_lw_zsol_nodust'], pd['map_lw_zsol_dust']
-        w_map_lw['v_s_mw'][ii,jj], w_map_lw['v_g_mw'][ii,jj], w_map_lw['v_s_disp'][ii,jj], w_map_lw['v_g_disp'][ii,jj] = pd['map_stars_mw_vel_los'], pd['map_gas_mw_vel_los'], pd['map_stars_vel_disp_los'], pd['map_gas_vel_disp_los']
-        w_map_lw['v_n'][ii,jj], w_map_lw['v_d'][ii,jj], w_map_lw['v_neb'][ii,jj] = pd['map_lw_vel_los_nodust'], pd['map_lw_vel_los_dust'], pd['map_lw_vel_los_nebular']
+            if output_pixel_spectra: 
+                w_map_spec_n[ii,jj], w_map_spec_d[ii,jj] = pd['obs_spectra_nodust_igm'], pd['obs_spectra_dust_igm']
+            
+            w_map_lw['age_n'][ii,jj], w_map_lw['age_d'][ii,jj], w_map_lw['z_n'][ii,jj], w_map_lw['z_d'][ii,jj] = pd['map_lw_age_nodust'], pd['map_lw_age_dust'], pd['map_lw_zsol_nodust'], pd['map_lw_zsol_dust']
+            w_map_lw['v_s_mw'][ii,jj], w_map_lw['v_g_mw'][ii,jj], w_map_lw['v_s_disp'][ii,jj], w_map_lw['v_g_disp'][ii,jj] = pd['map_stars_mw_vel_los'], pd['map_gas_mw_vel_los'], pd['map_stars_vel_disp_los'], pd['map_gas_vel_disp_los']
+            w_map_lw['v_n'][ii,jj], w_map_lw['v_d'][ii,jj], w_map_lw['v_neb'][ii,jj] = pd['map_lw_vel_los_nodust'], pd['map_lw_vel_los_dust'], pd['map_lw_vel_los_nebular']
 
+    finally:
+        # Final cleanup of shared memory files [Option 1]
+        shutil.rmtree(ssp_mmap_dir)
 
     # FLUX CONSERVING REBINNING TO USER PIXEL SIZE
     # The raw values in w_map_flux are in erg/s/cm2/A (linear flux density).
