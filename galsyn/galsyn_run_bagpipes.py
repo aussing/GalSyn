@@ -90,25 +90,51 @@ _child_wave_max_rest = 30000.0
 
 def calculate_local_logu(sfr_pixel, nH_local, log_xi_ion=25.39, epsilon=0.3):
     """
-    Calculates log10(U) using the analytical formula from Reddy et al. (2023).
+    Calculates the ionization parameter log10(U) using the analytical formula 
+    from Reddy et al. (2023).
+    
+    Equation: U = k * (n_H * Q * epsilon**2)**(1/3)
+    
+    Parameters:
+    -----------
+    sfr_pixel : float
+        Instantaneous star formation rate in the pixel (Msun/yr).
+    nH_local : float
+        Local hydrogen number density (or electron density n_e) in cm^-3.
+    log_xi_ion : float, optional
+        Ratio-based ionizing photon production efficiency in log10(erg^-1 Hz).
+        Default to 25.39.
+    epsilon : float, optional
+        Volume filling factor of the H II region (dimensionless). Default is 0.3.
+        
+    Returns:
+    --------
+    float
+        The base-10 logarithm of the ionization parameter U.
     """
     if sfr_pixel <= 0 or nH_local <= 0:
         return -4.0 
     
-    # Constant k derived from physical constants
-    k = 5.296e-20
+    # Constant k derived from physical constants: (3 * alpha_B^2 / (16 * pi * c^3))^(1/3)
+    # Value: ~5.296e-20 cm * s^(1/3)
+    k = np.float64(5.296e-20)
+
+    # 1. Convert ratio-based xi_ion (erg^-1 Hz) to rate-based Q/SFR (photons/s per Msun/yr)
+    # Using the rescaled Kennicutt 1998 conversion for Chabrier IMF:
+    # L_uv / SFR = 1.28e28 (erg/s/Hz) / (Msun/yr)
+    l_uv_per_sfr = np.float64(1.28e28)
+    xi_ion_ratio = np.power(10.0, np.float64(log_xi_ion))
     
-    # Convert ratio-based xi_ion to rate-based Q/SFR
-    l_uv_per_sfr = 1.28e28
-    xi_ion_ratio = 10**log_xi_ion
+    # Q_per_sfr is the number of ionizing photons/s produced per 1 Msun/yr
     q_per_sfr = xi_ion_ratio * l_uv_per_sfr
-    
-    # Calculate total ionizing photon rate Q
-    Q = sfr_pixel * q_per_sfr
+
+    # Calculate the total ionizing photon rate Q (s^-1) for the pixel
+    Q = np.float64(sfr_pixel) * q_per_sfr
     
     # Analytical calculation of U
-    U = k * (nH_local * Q * (epsilon**2))**(1/3)
+    U = k * (np.float64(nH_local) * Q * (np.float64(epsilon)**2))**(1/3)
     
+    # Returns log10(U), clipped to standard physical ranges found in high-z samples
     return np.log10(np.clip(U, 1e-4, 1e-1))
 
 def rebin_map(data, factor, mode='sum'):

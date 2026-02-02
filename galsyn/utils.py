@@ -176,9 +176,15 @@ def filtering(wave_spec, flux_spec, wave_filter, trans_filter):
         integrand = F_lambda * T_lambda * wave_common
         # Replace non-finite values (like NaNs/Infs from invalid ops) with 0 before integration
         integrand[~np.isfinite(integrand)] = 0.0 
+
+    # Check if trapezoid exists, otherwise fallback to trapz
+    if hasattr(np, 'trapezoid'):
+        nptrapz = np.trapezoid
+    else:
+        nptrapz = np.trapz
     
-    numerator = np.trapz(integrand, wave_common)
-    denominator = np.trapz(T_lambda * wave_common, wave_common)
+    numerator = nptrapz(integrand, wave_common)
+    denominator = nptrapz(T_lambda * wave_common, wave_common)
 
     # Handle division by zero if the filter denominator is zero (i.e., filter has no transmission)
     if denominator == 0.0:
