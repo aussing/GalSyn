@@ -90,10 +90,7 @@ _child_wave_max_rest = 30000.0
 
 def calculate_local_logu(sfr_pixel, nH_local, log_xi_ion=25.39, epsilon=0.3):
     """
-    Calculates the ionization parameter log10(U) using the analytical formula 
-    from Reddy et al. (2023).
-    
-    Equation: U = k * (n_H * Q * epsilon**2)**(1/3)
+    Calculates the ionization parameter log10(U).
     
     Parameters:
     -----------
