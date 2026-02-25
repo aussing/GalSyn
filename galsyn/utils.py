@@ -792,16 +792,45 @@ def get_2d_density_projection_no_los_binning(star_coords, particle_masses, pixel
     # Normalize line-of-sight distances for STARS
     star_line_of_sight_distances_normalized = star_line_of_sight_distances_raw - min_global_los
 
-    # Calculate the extent of the *entire* projected STAR dataset for global map
+    # Current logic to calculate dimensions
     min_x_full, min_y_full = np.min(projected_star_2d_coords, axis=0)
     max_x_full, max_y_full = np.max(projected_star_2d_coords, axis=0)
+    
+    dim_x = max_x_full - min_x_full
+    dim_y = max_y_full - min_y_full
 
-    # Use the input pixel_size for consistency, but ensure it covers the full range
-    effective_pixel_size_global = pixel_size
-    epsilon_global = 1e-9 * effective_pixel_size_global
+    max_allowed_dim = 3000.0  # kpc
+    
+    # loop to prune outliers until the bounding box fits
+    while dim_x > max_allowed_dim or dim_y > max_allowed_dim:
+        # Calculate the center of the current distribution
+        center_x = (min_x_full + max_x_full) / 2.0
+        center_y = (min_y_full + max_y_full) / 2.0
+        
+        # Calculate squared distance of all particles from the center
+        dist_sq = (projected_star_2d_coords[:, 0] - center_x)**2 + \
+                  (projected_star_2d_coords[:, 1] - center_y)**2
+        
+        # Find the index of the particle furthest from the center
+        outlier_idx = np.argmax(dist_sq)
+        
+        # Remove the outlier from coordinates and masses
+        # Note: If particle_masses is used later, ensure it stays synced
+        projected_star_2d_coords = np.delete(projected_star_2d_coords, outlier_idx, axis=0)
+        particle_masses = np.delete(particle_masses, outlier_idx)
+        
+        # Recalculate dimensions for the next iteration
+        if len(projected_star_2d_coords) == 0:
+            break # Safety break if all particles are removed
+            
+        min_x_full, min_y_full = np.min(projected_star_2d_coords, axis=0)
+        max_x_full, max_y_full = np.max(projected_star_2d_coords, axis=0)
+        dim_x = max_x_full - min_x_full
+        dim_y = max_y_full - min_y_full
 
-    num_pixels_x_global = int(np.ceil((max_x_full - min_x_full + epsilon_global) / effective_pixel_size_global))
-    num_pixels_y_global = int(np.ceil((max_y_full - min_y_full + epsilon_global) / effective_pixel_size_global))
+    # Proceed with the rest of the function using the pruned coordinates
+    num_pixels_x_global = int(np.ceil(dim_x / pixel_size))
+    num_pixels_y_global = int(np.ceil(dim_y / pixel_size))
 
     if num_pixels_x_global == 0: num_pixels_x_global = 1
     if num_pixels_y_global == 0: num_pixels_y_global = 1
@@ -809,12 +838,12 @@ def get_2d_density_projection_no_los_binning(star_coords, particle_masses, pixel
     # Create a global mass density map (STARS) to find the most massive pixel
     global_star_mass_density_map = np.zeros((num_pixels_y_global, num_pixels_x_global), dtype=float)
 
-    for i in range(star_coords.shape[0]):
+    for i in range(len(projected_star_2d_coords)):
         x_coord_proj = projected_star_2d_coords[i, 0]
         y_coord_proj = projected_star_2d_coords[i, 1]
 
-        x_idx_global = int(np.floor((x_coord_proj - min_x_full) / effective_pixel_size_global))
-        y_idx_global = int(np.floor((y_coord_proj - min_y_full) / effective_pixel_size_global))
+        x_idx_global = int(np.floor((x_coord_proj - min_x_full) / pixel_size))
+        y_idx_global = int(np.floor((y_coord_proj - min_y_full) / pixel_size))
 
         # Clip indices to ensure they are within the valid range for the global map
         x_idx_global = np.clip(x_idx_global, 0, num_pixels_x_global - 1)
@@ -832,8 +861,8 @@ def get_2d_density_projection_no_los_binning(star_coords, particle_masses, pixel
         most_massive_pixel_y_idx_global, most_massive_pixel_x_idx_global = np.unravel_index(flat_idx, global_star_mass_density_map.shape)
 
     # Convert most massive pixel index to its physical center coordinate in the global space
-    most_massive_pixel_x_coord_global = min_x_full + (most_massive_pixel_x_idx_global + 0.5) * effective_pixel_size_global
-    most_massive_pixel_y_coord_global = min_y_full + (most_massive_pixel_y_idx_global + 0.5) * effective_pixel_size_global
+    most_massive_pixel_x_coord_global = min_x_full + (most_massive_pixel_x_idx_global + 0.5) * pixel_size
+    most_massive_pixel_y_coord_global = min_y_full + (most_massive_pixel_y_idx_global + 0.5) * pixel_size
 
 
     # Define the cutout grid's extent and dimensions based on most massive STAR pixel
@@ -853,7 +882,7 @@ def get_2d_density_projection_no_los_binning(star_coords, particle_masses, pixel
     star_mass_density_map = np.zeros((num_pixels_y_cutout, num_pixels_x_cutout), dtype=float)
 
     # Assign STAR particles to the cutout grid
-    for i in range(star_coords.shape[0]):
+    for i in range(len(projected_star_2d_coords)):
         x_coord_proj = projected_star_2d_coords[i, 0]
         y_coord_proj = projected_star_2d_coords[i, 1]
 
