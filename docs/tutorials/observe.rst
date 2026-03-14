@@ -15,6 +15,8 @@ specifically the `jw011800-deep subregion <https://slate.ucsc.edu/~brant/jades-d
 Please refer to the paper (and reference therein) for more information about the assummed observational characterictics (exposure time, limiting magnitudes, etc.) and how they are obtained. 
 We will use those parameters in the demo below. For the PSFs, we will use empirical PSFs taken from the `JADES website <https://slate.ucsc.edu/~brant/jades-dr5/GOODS-N/hlsp/images/submosaics/>`_. 
 
+PSF images used in the following scripts can be found in this `online folder <https://drive.google.com/drive/folders/1Ezdovq19gJ-SezMH4Xt1XDJufx-jNG1M?usp=sharing>`_.
+
 .. code-block:: python
 
     import numpy as np
@@ -165,6 +167,8 @@ Once we have done all of these, we will run the mock IFU data generation.
 
 The ``observe`` module requires a PSF cube where the wavelength axis matches your desired output grid. 
 Since STPSF outputs multiple extensions, we first extract and standardize the ``DET_DIST`` data.
+
+PSF cube used in the following script can be found in this `online folder <https://drive.google.com/drive/folders/1Ezdovq19gJ-SezMH4Xt1XDJufx-jNG1M?usp=sharing>`_.
 
 .. code-block:: python
 

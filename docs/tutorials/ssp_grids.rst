@@ -10,6 +10,8 @@ As detailed in Abdurro'uf et al. (2026), the package offers two modes for spectr
 
 In GalSyn, there are two widely-used Stellar Population Synthesis (SPS) codes: **FSPS** and **Bagpipes**. In this page, we will show example scripts for generating SSP libraries using the ``ssp_generator_fsps`` and ``ssp_generator_bagpipes`` modules.
 
+While generating SSP libraries is computationally demanding, the resulting data can be reused across all subsequent synthetic processing. 
+To save time, we have provided several pre-generated SSP grid files in this `online folder <https://drive.google.com/drive/folders/1KCXI_EFu1m69SvLLcCk46WL7lE-Ej8gQ?usp=sharing>`_.
 
 Here is an example script for generating SSP grids using FSPS:
 
