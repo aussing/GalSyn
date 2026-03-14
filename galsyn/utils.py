@@ -515,7 +515,7 @@ def construct_SFH(stars_form_lbt, stars_init_mass, stars_metallicity, del_t=0.3,
     nstars_in_bins, _ = np.histogram(stars_form_lbt, bins=bins)
     mass_times_metallicity_in_bins, _ = np.histogram(stars_form_lbt, bins=bins, weights=stars_init_mass * stars_metallicity)
 
-    # Calculate Star Formation Rate (SFR)
+    # Calculate SFR
     sfh_sfr = mass_in_bins / del_t / 1e9
 
     # Total stellar mass in each bin

@@ -402,7 +402,7 @@ class GalSynMockObservation_ifu:
         return resampled
 
     def process_datacube(self, dust_attenuation=None, apply_noise_to_cube=True):
-        print("\nStarting IFU Pipeline: Resample -> Smoothing -> PSF -> Noise")
+        print("\nStarting IFU Pipeline...")
         process_types = [True, False] if dust_attenuation is None else [dust_attenuation]
         
         for current_dust_attenuation in process_types:
@@ -647,8 +647,7 @@ class GalSynMockObservation_mosaic:
 
     def _load_filter_transmission_from_paths_local(self, filters_list, filter_transmission_path_dict):
         """
-        Loads filter transmission curves and computes pivot wavelengths
-        (Eq. 16 of the GalSyn paper) for every filter in *filters_list*.
+        Loads filter transmission curves and computes pivot wavelengths for every filter in *filters_list*.
         Identical to the implementation in GalSynMockObservation_imaging.
 
         Returns
@@ -790,17 +789,7 @@ class GalSynMockObservation_mosaic:
 
     def process_images(self, apply_noise_to_image=True):
         """
-        Runs the full mock-observation pipeline for every filter in
-        ``self.filters``:
-
-            Load mosaic from primary HDU
-            -> Convert to erg/s/cm^2/Angstrom
-            -> Flux-conserving resampling to desired pixel scale
-            -> PSF convolution
-            -> Noise injection  (Poisson shot + Gaussian background)
-            -> RMS map construction
-            -> Convert back to original flux units
-
+        Runs the full mock-observation pipeline for every filter.
         Results are stored in ``self.sci_images`` and ``self.rms_images``
         (keyed by filter name) and can be written to disk with
         :meth:`save_results_to_fits`.
