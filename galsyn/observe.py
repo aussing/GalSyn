@@ -420,7 +420,7 @@ class GalSynMockObservation_ifu:
             cube_wave_cut = interp_cube_flat.T.reshape(len(self.desired_wave_grid), cube_erg.shape[1], cube_erg.shape[2])
 
             # 2. Improved Spatial Resampling
-            print(f"  Resampling spatially to {self.final_pixel_scale_arcsec:.4f} arcsec (Bicubic)...")
+            print(f"  Resampling spatially to {self.final_pixel_scale_arcsec:.4f} arcsec...")
             sample_slice = self._rebin_map_flux(cube_wave_cut[0], self.initial_pixel_scale_arcsec, self.final_pixel_scale_arcsec)
             resampled_cube = np.zeros((len(self.desired_wave_grid), sample_slice.shape[0], sample_slice.shape[1]))
             
@@ -460,7 +460,7 @@ class GalSynMockObservation_ifu:
                 mag_zp, lim_mag, snr_lim, exp_time = self._get_wave_dependent_param(self.mag_zp, wave), self.limiting_magnitude_wave_func(wave), self._get_wave_dependent_param(self.snr_limit, wave), self._get_wave_dependent_param(self.exposure_time, wave)
                 
                 counts_expected = np.maximum(0, exp_time * (10**(0.4 * (mag_zp - (-2.5 * np.log10(np.clip(convolved_cube[i] * wave**2 / c_angstrom_s, 1e-50, None)) - 48.6)))))
-                sigma_bg_sq = np.maximum(0, (exp_time * (10**(0.4 * (mag_zp - lim_mag))) / snr_lim)**2 - exp_time * (10**(0.4 * (mag_zp - lim_mag)))) / (factor**2)
+                sigma_bg_sq = np.maximum(0, (exp_time * (10**(0.4 * (mag_zp - lim_mag))) / snr_lim / 2.3)**2 - exp_time * (10**(0.4 * (mag_zp - lim_mag)))) / (factor**2)
                 flux_per_count = (10**((mag_zp - 2.5 * np.log10(1.0/exp_time) + 48.6)/(-2.5))) * c_angstrom_s / wave**2
                 
                 if apply_noise_to_cube: 
