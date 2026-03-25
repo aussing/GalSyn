@@ -18,8 +18,6 @@ import tempfile
 import shutil
 import gc
 
-import bagpipes as pipes
-
 # Constants for solar metallicity
 BAGPIPES_Z_SUN = 0.02
 L_SUN_ERG_S = 3.828e33 # Solar luminosity in erg/s
@@ -272,6 +270,7 @@ def init_worker(ssp_code_val, snap_z_val, pix_area_kpc2_val, filters_list_val, f
             _global_ssp_nebular_emission_interpolator = RegularGridInterpolator(grid_coords, ssp_nebular_emission_grid, method=method, bounds_error=False, fill_value=None)
             _global_ssp_stellar_mass_interpolator = RegularGridInterpolator(grid_coords, ssp_stellar_mass_grid, method=method, bounds_error=False, fill_value=None)
     else:
+        import bagpipes as pipes
         dust = {"type": "Calzetti", "Av": 0.0, "eta": 1.0}
         nebular = {"logU": -2.0}
         _ssp_worker_bagpipes_model_components = {"redshift": 0.0, "veldisp": 0, "dust": dust, "nebular": nebular, "sfh": "delta"}
@@ -396,6 +395,7 @@ def _process_pixel_data(ii, jj, star_particle_membership_list, gas_particle_memb
                     iu = np.argmin(np.abs(ssp_logu_grid - dynamic_logu))
                     s_cont, n_em, s_mass = ssp_stellar_continuum_grid[ia, iz, iu, :], ssp_nebular_emission_grid[ia, iz, iu, :], ssp_stellar_mass_grid[ia, iz, iu]
             else:
+                import bagpipes as pipes
                 burst = {"age": _worker_stars_age[star_id], "massformed": 1.0, "metallicity": 10.0**particle_logzsol}
                 m_total = pipes.model_galaxy({**_ssp_worker_bagpipes_model_components, "burst": burst, "nebular": {"logU": np.round(pixel_results['map_gas_logu'], 1)}}, spec_wavs=ssp_wave)
                 s_tot = m_total.spectrum_full / L_SUN_ERG_S

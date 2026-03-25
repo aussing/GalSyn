@@ -18,8 +18,6 @@ import tempfile
 import shutil
 import gc
 
-import fsps
-
 FSPS_Z_SUN = 0.019
 
 # Conversion factor: (Atoms per Msun) / (cm3 per kpc3)
@@ -309,6 +307,8 @@ def init_worker(ssp_code_val, snap_z_val, pix_area_kpc2_val, filters_list_val, f
             _global_ssp_stellar_mass_interpolator = RegularGridInterpolator(grid_coords, ssp_stellar_mass_grid, method=method, bounds_error=False, fill_value=None)
 
     else:
+        import fsps
+        
         sp_instance = fsps.StellarPopulation(zcontinuous=1)
         sp_instance.params['imf_type'] = int(imf_type_val)
         sp_instance.params['imf_upper_limit'] = float(imf_upper_limit_val)
