@@ -1,0 +1,15 @@
+version: 2
+
+# Build documentation in the docs/ directory with Sphinx
+sphinx:
+  configuration: docs/conf.py
+
+# Build using Ubuntu 24.04 and Python 3.12
+build:
+  os: ubuntu-24.04
+  tools:
+    python: "3.12"
+
+python:
+  install:
+    - requirements: docs/requirements.txt
