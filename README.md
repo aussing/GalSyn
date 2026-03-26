@@ -30,3 +30,26 @@ physical assumptions (like IMF or dust laws) impact emergent galaxy light.
 
 Check out the sections below to learn more about GalSyn's capabilities, how to use it, and its API. 
 For more detailed information about the physical ingredients and algorithms, please see **Abdurro'uf et al. (2026)**.
+
+
+## Installation
+
+
+### Installing stable version
+
+GalSyn is available as a package on PyPI and can be installed by executing the following command:
+
+```
+pip install galsyn
+```
+
+
+### Installing development version
+
+If you want to install the most recent version of GalSyn, you can clone it from its GitHub repository and install:
+
+```
+git clone https://github.com/aabdurrouf/GalSyn.git
+cd GalSyn
+python -m pip install .
+```
