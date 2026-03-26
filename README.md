@@ -29,11 +29,10 @@ highly flexible user control, allowing for large-scale population studies and sy
 physical assumptions (like IMF or dust laws) impact emergent galaxy light.
 
 Check out the sections below to learn more about GalSyn's capabilities, how to use it, and its API. 
-For more detailed information about the physical ingredients and algorithms, please see **Abdurro'uf et al. (2026)**.
+For more detailed information about the physical ingredients and algorithms, please see [Abdurro'uf et al. (2026)](https://ui.adsabs.harvard.edu/abs/2026arXiv260323986A/abstract).
 
 
 ## Installation
-
 
 ### Installing stable version
 
@@ -42,7 +41,6 @@ GalSyn is available as a package on PyPI and can be installed by executing the f
 ```
 pip install galsyn
 ```
-
 
 ### Installing development version
 
@@ -53,3 +51,24 @@ git clone https://github.com/aabdurrouf/GalSyn.git
 cd GalSyn
 python -m pip install .
 ```
+
+## Citation
+If you use this code for your research, please reference [Abdurro'uf et al. (2026)](https://ui.adsabs.harvard.edu/abs/2026arXiv260323986A/abstract):
+
+```
+@ARTICLE{2026arXiv260323986A,
+       author = {{Abdurro'uf} and {Ferguson}, Henry C. and {Salim}, Samir and {Iyer}, Kartheik G. and {Bradley}, Larry D. and {Coe}, Dan and {Saputra Haryana}, Novan and {Hassan}, Sultan and {Jung}, Intae and {Khullar}, Gourav and {Morishita}, Takahiro and {Mowla}, Lamiya},
+        title = "{GalSyn I: A Forward-Modeling Framework for Synthetic Galaxy Observations from Hydrodynamical Simulations and First Data Release from IllustrisTNG}",
+      journal = {arXiv e-prints},
+     keywords = {Astrophysics of Galaxies},
+         year = 2026,
+        month = mar,
+          eid = {arXiv:2603.23986},
+        pages = {arXiv:2603.23986},
+archivePrefix = {arXiv},
+       eprint = {2603.23986},
+ primaryClass = {astro-ph.GA},
+       adsurl = {https://ui.adsabs.harvard.edu/abs/2026arXiv260323986A},
+      adsnote = {Provided by the SAO/NASA Astrophysics Data System}
+}
+``` 
