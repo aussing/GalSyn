@@ -62,7 +62,7 @@ def make_sim_file_from_gadget_data(input_path, snapshot_name, target_halo_number
 
     # get gas particles data
     if 'PartType0' in snap_data:
-        gas_coords   = snap_data['PartType0']['Coordinates'][gas_start_index:gas_end_index] * snap_a / cosmo_h * 1000 # in kpc
+        gas_coords   = snap_data['PartType0']['Coordinates'][gas_start_index:gas_end_index] * snap_a / cosmo_h * kpc_factor # in kpc
         gas_vel      = snap_data['PartType0']['Velocities'][gas_start_index:gas_end_index] * np.sqrt(snap_a)   # peculiar velocity in km/s
         gas_mass     = snap_data['PartType0']['Masses'][gas_start_index:gas_end_index] * 1e+10 / cosmo_h
         gas_zmet     = snap_data['PartType0']['Metallicity'][gas_start_index:gas_end_index]

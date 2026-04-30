@@ -11,9 +11,9 @@ def read_halo_catalogue(input_path, snapshot_name):
     #### Assumes VELOCIraptor halo finder outputs
     snapshot_name=snapshot_name.split('.')[0]
 
-    halo_properties = h5py.File(f'{input_path}/halos/{snapshot_name}.VELOCIraptor.properties.0', 'r')
-    halo_group_info = h5py.File(f'{input_path}/halos/{snapshot_name}.VELOCIraptor.catalog_groups.0', 'r')
-    group_particles = h5py.File(f'{input_path}/halos/{snapshot_name}.VELOCIraptor.catalog_particles.0', 'r')
+    halo_properties = h5py.File(f'{input_path}/haloes/{snapshot_name}.VELOCIraptor.properties.0', 'r')
+    halo_group_info = h5py.File(f'{input_path}/haloes/{snapshot_name}.VELOCIraptor.catalog_groups.0', 'r')
+    group_particles = h5py.File(f'{input_path}/haloes/{snapshot_name}.VELOCIraptor.catalog_particles.0', 'r')
     
     return halo_properties, halo_group_info, group_particles
     
@@ -54,6 +54,8 @@ def make_sim_file_from_swift_data(input_path, snapshot_name, target_halo_number=
 
     halo_pos = np.array((halo_properties['Xc'][target_halo_number], halo_properties['Yc'][target_halo_number], halo_properties['Zc'][target_halo_number]))
     halo_radius = halo_properties['R_200crit'][target_halo_number]
+
+    print(f'Extracting data for halo {target_halo_number} at position {halo_pos} and radius {halo_radius} Mpc')
     
     cosmo_h    = snap_data['Cosmology'].attrs['h']
     z          = snap_data['Cosmology'].attrs['Redshift']
@@ -65,15 +67,19 @@ def make_sim_file_from_swift_data(input_path, snapshot_name, target_halo_number=
     stellar_coords_phys_conversion = snap_data[f'PartType{star_particle_type}/Coordinates'].attrs['Conversion factor to physical CGS (including cosmological corrections)'] / (3.085678e+21)
 
     star_mask = get_particle_id_mask(snap_data,  halo_pos, halo_radius, particle_type=4)
+    
+    print(f'Number of star particles in halo {target_halo_number}: {np.sum(star_mask)}')
 
     stars_mass      = snap_data[f'PartType{star_particle_type}']['Masses'][star_mask] * stellar_mass_phys_conversion
-    stars_init_mass = snap_data[f'PartType{star_particle_type}']['InitialMasses'][star_mask] * 1e10 ### stellar_mass_phys_conversion
-    stars_zmet      = np.ones(np.sum(star_mask)) * 0.01 #### snap_data[f'PartType{star_particle_type}']['MetalMassFractions'][star_mask] * snap_data[f'PartType{star_particle_type}']['Masses'][star_mask] * 1e10
+    stars_init_mass = snap_data[f'PartType{star_particle_type}']['InitialMasses'][star_mask] * stellar_mass_phys_conversion
+    stars_zmet      = snap_data[f'PartType{star_particle_type}']['MetalMassFractions'][star_mask] #* snap_data[f'PartType{star_particle_type}']['Masses'][star_mask] * 1e10
     stars_coords    = snap_data[f'PartType{star_particle_type}']['Coordinates'][star_mask] * stellar_coords_phys_conversion # in kpc
     stars_vel       = snap_data[f'PartType{star_particle_type}']['Velocities'][star_mask] # * np.sqrt(snap_a)  # peculiar velocities in km/s
     stars_form_a    = snap_data[f'PartType{star_particle_type}']['BirthScaleFactors'][star_mask]
     stars_form_z    = (1.0/stars_form_a) - 1.0
 
+    
+        # np.ones(np.sum(star_mask)) * 0.01 ####
     # get gas particles data
     if 'PartType0' in snap_data:
         gas_mask = get_particle_id_mask(snap_data,  halo_pos, halo_radius, particle_type=0)
@@ -82,8 +88,8 @@ def make_sim_file_from_swift_data(input_path, snapshot_name, target_halo_number=
         
         gas_coords   = snap_data['PartType0']['Coordinates'][gas_mask] * gas_coords_phys_conversion # in kpc
         gas_vel      = snap_data['PartType0']['Velocities'][gas_mask] # * np.sqrt(snap_a)   # peculiar velocity in km/s
-        gas_mass     = snap_data['PartType0']['Masses'][gas_mask] * 1e10###gas_mass_phys_conversion
-        gas_zmet     = snap_data['PartType0']['MetalMassFractions'][gas_mask] * snap_data['PartType0']['Masses'][gas_mask] * 1e10
+        gas_mass     = snap_data['PartType0']['Masses'][gas_mask] * gas_mass_phys_conversion
+        gas_zmet     = snap_data['PartType0']['MetalMassFractions'][gas_mask] #* snap_data['PartType0']['Masses'][gas_mask] * 1e10
         gas_sfr_inst = snap_data['PartType0']['StarFormationRates'][gas_mask]   # in Msun/yr
         u            = snap_data['PartType0']['InternalEnergies'][gas_mask]
         # Xe           = snap_data['PartType0']['ElectronAbundance'][gas_mask]
@@ -108,7 +114,10 @@ def make_sim_file_from_swift_data(input_path, snapshot_name, target_halo_number=
         gas_mass_H   = [0]
     
     snap_data.close()
-
+    # print(f'x-axis: {np.min(stars_coords[:,0])} < star coords < {np.max(stars_coords[:,0])} kpc')
+    # print(f'y-axis: {np.min(stars_coords[:,1])} < star coords < {np.max(stars_coords[:,1])} kpc')
+    # print(f'z-axis: {np.min(stars_coords[:,2])} < star coords < {np.max(stars_coords[:,2])} kpc')
+    # print(stars_zmet[0:10])
     create_hdf5_file(output_hdf5, stars_init_mass, stars_form_z, stars_mass, stars_zmet, stars_coords,
                     stars_vel, gas_mass, gas_zmet, gas_sfr_inst, gas_temp, gas_coords, gas_vel, gas_mass_H)
     
