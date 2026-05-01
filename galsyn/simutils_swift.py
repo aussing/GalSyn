@@ -62,6 +62,7 @@ def make_sim_file_from_swift_data(input_path, snapshot_name, target_halo_number=
     snap_a     = snap_data['Cosmology'].attrs['Scale-factor']
     # kpc_factor = snap_data['Units'].attrs['Unit length in cgs (U_L)'] / (3.085678e+21)  # Allows for run time conversion to kpc units
     solar_mass = snap_data['PhysicalConstants/CGS'].attrs['solar_mass']  
+    Z_sun      = 1/0.02
 
     stellar_mass_phys_conversion   = snap_data[f'PartType{star_particle_type}/Masses'].attrs['Conversion factor to physical CGS (including cosmological corrections)']/solar_mass
     stellar_coords_phys_conversion = snap_data[f'PartType{star_particle_type}/Coordinates'].attrs['Conversion factor to physical CGS (including cosmological corrections)'] / (3.085678e+21)
@@ -72,14 +73,12 @@ def make_sim_file_from_swift_data(input_path, snapshot_name, target_halo_number=
 
     stars_mass      = snap_data[f'PartType{star_particle_type}']['Masses'][star_mask] * stellar_mass_phys_conversion
     stars_init_mass = snap_data[f'PartType{star_particle_type}']['InitialMasses'][star_mask] * stellar_mass_phys_conversion
-    stars_zmet      = snap_data[f'PartType{star_particle_type}']['MetalMassFractions'][star_mask] #* snap_data[f'PartType{star_particle_type}']['Masses'][star_mask] * 1e10
+    stars_zmet      = snap_data[f'PartType{star_particle_type}']['MetalMassFractions'][star_mask] #* Z_sun #* snap_data[f'PartType{star_particle_type}']['Masses'][star_mask] * 1e10
     stars_coords    = snap_data[f'PartType{star_particle_type}']['Coordinates'][star_mask] * stellar_coords_phys_conversion # in kpc
     stars_vel       = snap_data[f'PartType{star_particle_type}']['Velocities'][star_mask] # * np.sqrt(snap_a)  # peculiar velocities in km/s
     stars_form_a    = snap_data[f'PartType{star_particle_type}']['BirthScaleFactors'][star_mask]
     stars_form_z    = (1.0/stars_form_a) - 1.0
 
-    
-        # np.ones(np.sum(star_mask)) * 0.01 ####
     # get gas particles data
     if 'PartType0' in snap_data:
         gas_mask = get_particle_id_mask(snap_data,  halo_pos, halo_radius, particle_type=0)
@@ -89,7 +88,7 @@ def make_sim_file_from_swift_data(input_path, snapshot_name, target_halo_number=
         gas_coords   = snap_data['PartType0']['Coordinates'][gas_mask] * gas_coords_phys_conversion # in kpc
         gas_vel      = snap_data['PartType0']['Velocities'][gas_mask] # * np.sqrt(snap_a)   # peculiar velocity in km/s
         gas_mass     = snap_data['PartType0']['Masses'][gas_mask] * gas_mass_phys_conversion
-        gas_zmet     = snap_data['PartType0']['MetalMassFractions'][gas_mask] #* snap_data['PartType0']['Masses'][gas_mask] * 1e10
+        gas_zmet     = snap_data['PartType0']['MetalMassFractions'][gas_mask] #* Z_sun #* snap_data['PartType0']['Masses'][gas_mask] * 1e10
         gas_sfr_inst = snap_data['PartType0']['StarFormationRates'][gas_mask]   # in Msun/yr
         u            = snap_data['PartType0']['InternalEnergies'][gas_mask]
         # Xe           = snap_data['PartType0']['ElectronAbundance'][gas_mask]
@@ -117,7 +116,7 @@ def make_sim_file_from_swift_data(input_path, snapshot_name, target_halo_number=
     # print(f'x-axis: {np.min(stars_coords[:,0])} < star coords < {np.max(stars_coords[:,0])} kpc')
     # print(f'y-axis: {np.min(stars_coords[:,1])} < star coords < {np.max(stars_coords[:,1])} kpc')
     # print(f'z-axis: {np.min(stars_coords[:,2])} < star coords < {np.max(stars_coords[:,2])} kpc')
-    # print(stars_zmet[0:10])
+    # print(stars_coords.shape)
     create_hdf5_file(output_hdf5, stars_init_mass, stars_form_z, stars_mass, stars_zmet, stars_coords,
                     stars_vel, gas_mass, gas_zmet, gas_sfr_inst, gas_temp, gas_coords, gas_vel, gas_mass_H)
     
