@@ -47,20 +47,18 @@ def make_sim_file_from_swift_data(input_path, snapshot_name, target_halo_number=
     """
         
     snapshot_number = snapshot_name.split('_')[-1].split('.')[0]
-    # haloinfo_fname  = f'/fof_subhalo_tab_{snapshot_number}.hdf5'
-    snap_data     = h5py.File(input_path + snapshot_name, 'r')
+    snap_data       = h5py.File(input_path + snapshot_name, 'r')
     halo_properties, halo_group_info, group_particles = read_halo_catalogue(input_path, snapshot_name)
 
 
     halo_pos = np.array((halo_properties['Xc'][target_halo_number], halo_properties['Yc'][target_halo_number], halo_properties['Zc'][target_halo_number]))
     halo_radius = halo_properties['R_200crit'][target_halo_number]
 
-    print(f'Extracting data for halo {target_halo_number} at position {halo_pos} and radius {halo_radius} Mpc')
+    print(f'Extracting data for halo {target_halo_number} at position {np.round(halo_pos,4)} and radius {np.round(halo_radius,4)} Mpc')
     
     cosmo_h    = snap_data['Cosmology'].attrs['h']
     z          = snap_data['Cosmology'].attrs['Redshift']
     snap_a     = snap_data['Cosmology'].attrs['Scale-factor']
-    # kpc_factor = snap_data['Units'].attrs['Unit length in cgs (U_L)'] / (3.085678e+21)  # Allows for run time conversion to kpc units
     solar_mass = snap_data['PhysicalConstants/CGS'].attrs['solar_mass']  
     Z_sun      = 1/0.02
 
@@ -113,10 +111,7 @@ def make_sim_file_from_swift_data(input_path, snapshot_name, target_halo_number=
         gas_mass_H   = [0]
     
     snap_data.close()
-    # print(f'x-axis: {np.min(stars_coords[:,0])} < star coords < {np.max(stars_coords[:,0])} kpc')
-    # print(f'y-axis: {np.min(stars_coords[:,1])} < star coords < {np.max(stars_coords[:,1])} kpc')
-    # print(f'z-axis: {np.min(stars_coords[:,2])} < star coords < {np.max(stars_coords[:,2])} kpc')
-    # print(stars_coords.shape)
+
     create_hdf5_file(output_hdf5, stars_init_mass, stars_form_z, stars_mass, stars_zmet, stars_coords,
                     stars_vel, gas_mass, gas_zmet, gas_sfr_inst, gas_temp, gas_coords, gas_vel, gas_mass_H)
     
