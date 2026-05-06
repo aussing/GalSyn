@@ -51,11 +51,10 @@ def make_sim_file_from_swift_data(input_path, snapshot_name, target_halo_number=
     try:
         halo_properties = h5py.File(f'{input_path}/halos/{reduced_snapshot_name}.VELOCIraptor.properties.0', 'r')
     except:
-        pass
-    try:
-        halo_properties = h5py.File(f'{input_path}/haloes/{reduced_snapshot_name}.VELOCIraptor.properties.0', 'r')
-    except:
-        print("Error occurred while reading swift halo properties.")
+        try:
+            halo_properties = h5py.File(f'{input_path}/haloes/{reduced_snapshot_name}.VELOCIraptor.properties.0', 'r')
+        except:
+            print("Error occurred while reading swift halo properties.")
 
 
     halo_pos = np.array((halo_properties['Xc'][target_halo_number], halo_properties['Yc'][target_halo_number], halo_properties['Zc'][target_halo_number]))
@@ -74,7 +73,7 @@ def make_sim_file_from_swift_data(input_path, snapshot_name, target_halo_number=
 
     star_mask = get_particle_id_mask(snap_data,  halo_pos, halo_radius, particle_type=4)
     
-    print(f'Extracting data for halo {target_halo_number} at position {np.round(halo_pos,4)} and radius {np.round(halo_radius,4)*stellar_coords_phys_conversion } kpc')
+    print(f'Extracting data for halo {target_halo_number} at position {np.round(halo_pos,4)} and radius {np.round(halo_radius*stellar_coords_phys_conversion,4)} kpc')
     print(f'Number of star particles in halo {target_halo_number}: {np.sum(star_mask)}')
 
     stars_mass      = snap_data[f'PartType{star_particle_type}']['Masses'][star_mask] * stellar_mass_phys_conversion

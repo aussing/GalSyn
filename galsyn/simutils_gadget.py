@@ -56,7 +56,7 @@ def make_sim_file_from_gadget_data(input_path, snapshot_name, target_halo_number
     snap_a     = snap_data['Header'].attrs['Time']
     kpc_factor = snap_data['Parameters'].attrs['UnitLength_in_cm'] / (3.085678e+21)  # Allows for run time conversion to kpc units
 
-    print(f'Extracting data for halo {target_halo_number} at position {np.round(halo_pos,4)} and radius {np.round(halo_radius,4)*kpc_factor} kpc')
+    print(f'Extracting data for halo {target_halo_number} at position {np.round(halo_pos,4)} and radius {np.round(halo_radius*kpc_factor,4)} kpc')
     print(f'Number of star particles in halo {target_halo_number}: {np.sum(target_len[star_particle_type])}')
 
     stars_mass      = snap_data[f'PartType{star_particle_type}']['Masses'][star_start_index:star_end_index] * 1e+10 / cosmo_h
