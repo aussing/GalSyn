@@ -5,20 +5,19 @@ from .imgutils import *
 from .utils import *
 import h5py
 
-
-def read_halo_catalogue(input_path, snapshot_name):
-    
-    #### Assumes VELOCIraptor halo finder outputs
-    snapshot_name=snapshot_name.split('.')[0]
-
-    halo_properties = h5py.File(f'{input_path}/haloes/{snapshot_name}.VELOCIraptor.properties.0', 'r')
-    halo_group_info = h5py.File(f'{input_path}/haloes/{snapshot_name}.VELOCIraptor.catalog_groups.0', 'r')
-    group_particles = h5py.File(f'{input_path}/haloes/{snapshot_name}.VELOCIraptor.catalog_particles.0', 'r')
-    
-    return halo_properties, halo_group_info, group_particles
-    
-
 def get_particle_id_mask(snapshot, halo_pos, halo_rad, particle_type):
+    """
+    Creates a boolean mask for particles of a given type that are within a specified radius of a halo's position.
+    There's a faster way to do this using the Cells dataset in the snapshot, but this should work for most haloes.
+
+    Args:
+        snapshot (h5py.File): The HDF5 file containing the snapshot data.
+        halo_pos (array-like): The (x, y, z) position of the halo.
+        halo_rad (float): The radius within which to select particles (in the same units as the coordinates).
+        particle_type (int): The particle type index to select (e.g., 0 for gas, 1 for dark matter, 4 for stars).
+    Returns:
+        np.ndarray: A boolean mask array where True indicates particles of the specified type within the halo radius.   
+    """
 
     part_coords  = np.array(snapshot[f'PartType{particle_type}']['Coordinates'], dtype=np.float64)
     part_coords_minus_halo_pos  = np.sqrt( (part_coords[:,0]  - halo_pos[0])**2 + (part_coords[:,1]  - halo_pos[1])**2 + (part_coords[:,2]  - halo_pos[2])**2 )
@@ -46,15 +45,23 @@ def make_sim_file_from_swift_data(input_path, snapshot_name, target_halo_number=
         output_hdf5 (str): The path to the newly created HDF5 file.
     """
         
-    snapshot_number = snapshot_name.split('_')[-1].split('.')[0]
-    snap_data       = h5py.File(input_path + snapshot_name, 'r')
-    halo_properties, halo_group_info, group_particles = read_halo_catalogue(input_path, snapshot_name)
+    snapshot_number       = snapshot_name.split('_')[-1].split('.')[0]
+    snap_data             = h5py.File(input_path + snapshot_name, 'r')
+    reduced_snapshot_name = snapshot_name.split('.')[0]
+    try:
+        halo_properties = h5py.File(f'{input_path}/halos/{reduced_snapshot_name}.VELOCIraptor.properties.0', 'r')
+    except:
+        pass
+    try:
+        halo_properties = h5py.File(f'{input_path}/haloes/{reduced_snapshot_name}.VELOCIraptor.properties.0', 'r')
+    except:
+        print("Error occurred while reading swift halo properties.")
 
 
     halo_pos = np.array((halo_properties['Xc'][target_halo_number], halo_properties['Yc'][target_halo_number], halo_properties['Zc'][target_halo_number]))
     halo_radius = halo_properties['R_200crit'][target_halo_number]
 
-    print(f'Extracting data for halo {target_halo_number} at position {np.round(halo_pos,4)} and radius {np.round(halo_radius,4)} Mpc')
+    
     
     cosmo_h    = snap_data['Cosmology'].attrs['h']
     z          = snap_data['Cosmology'].attrs['Redshift']
@@ -67,6 +74,7 @@ def make_sim_file_from_swift_data(input_path, snapshot_name, target_halo_number=
 
     star_mask = get_particle_id_mask(snap_data,  halo_pos, halo_radius, particle_type=4)
     
+    print(f'Extracting data for halo {target_halo_number} at position {np.round(halo_pos,4)} and radius {np.round(halo_radius,4)*stellar_coords_phys_conversion } kpc')
     print(f'Number of star particles in halo {target_halo_number}: {np.sum(star_mask)}')
 
     stars_mass      = snap_data[f'PartType{star_particle_type}']['Masses'][star_mask] * stellar_mass_phys_conversion

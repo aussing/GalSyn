@@ -46,11 +46,18 @@ def make_sim_file_from_gadget_data(input_path, snapshot_name, target_halo_number
  
     star_start_index   = target_offset[star_particle_type]
     star_end_index     = target_offset[star_particle_type] + target_len[star_particle_type]
+
+    halo_pos    = haloinfo_data['Group']['GroupPos'][target_halo_number]
+    halo_radius = haloinfo_data['Group']['Group_R_Crit200'][target_halo_number]
     
+
     cosmo_h    = snap_data['Parameters'].attrs['HubbleParam']
     z          = snap_data['Header'].attrs['Redshift']
     snap_a     = snap_data['Header'].attrs['Time']
     kpc_factor = snap_data['Parameters'].attrs['UnitLength_in_cm'] / (3.085678e+21)  # Allows for run time conversion to kpc units
+
+    print(f'Extracting data for halo {target_halo_number} at position {np.round(halo_pos,4)} and radius {np.round(halo_radius,4)*kpc_factor} kpc')
+    print(f'Number of star particles in halo {target_halo_number}: {np.sum(target_len[star_particle_type])}')
 
     stars_mass      = snap_data[f'PartType{star_particle_type}']['Masses'][star_start_index:star_end_index] * 1e+10 / cosmo_h
     stars_init_mass = snap_data[f'PartType{star_particle_type}']['Masses'][star_start_index:star_end_index] * 1e+10 / cosmo_h # Currently Gadget-4 has no mass loss prescription, so 'initial mass' is the same 'mass'
