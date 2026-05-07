@@ -32,9 +32,16 @@ def make_sim_file_from_gadget_data(input_path, snapshot_name, target_halo_number
     snapshot_number = snapshot_name.split('_')[-1].split('.')[0]
     haloinfo_fname  = f'/fof_subhalo_tab_{snapshot_number}.hdf5'
 
-    snap_data     = h5py.File(input_path + snapshot_name, 'r')
-    haloinfo_data = h5py.File(input_path + haloinfo_fname, 'r')
+    try:
+        snap_data     = h5py.File(input_path + snapshot_name, 'r')
+    except:
+        print("Error occurred while reading gadget snapshot data.")
     
+    try:
+        haloinfo_data = h5py.File(input_path + haloinfo_fname, 'r')
+    except:
+        print("Error occurred while reading gadget halo info data.")
+
     group_offset_type  = np.array(haloinfo_data['Group']['GroupOffsetType'], dtype=np.int64)
     group_len_type     = np.array(haloinfo_data['Group']['GroupLenType'], dtype=np.int64)
  
